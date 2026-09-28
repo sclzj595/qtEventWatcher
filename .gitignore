@@ -1,0 +1,20 @@
+# 构建目录
+build/
+build-qt6/
+build-mingw5/
+build-mingw6/
+out/
+
+# 运行期产物
+logs/
+test_record_logs/
+diag_report_test.*
+*.log
+
+# IDE
+.vscode/
+
+# Qt Creator / VS 临时
+*.user
+*.autosave
+CMakeLists.txt.user*

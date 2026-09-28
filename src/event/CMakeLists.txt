@@ -1,0 +1,12 @@
+set(QT_EVENT_WATCHER_SOURCES
+    ${QT_EVENT_WATCHER_SOURCES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/EventGuard.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EventStatistics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EventWatcher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/MetaCallFilter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/MetaCallSenderRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/MetaCallParser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ThreadRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/MetaCallWatcher.cpp
+    PARENT_SCOPE
+)

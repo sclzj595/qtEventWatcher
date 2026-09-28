@@ -1,0 +1,12 @@
+set(QT_EVENT_WATCHER_SOURCES
+    ${QT_EVENT_WATCHER_SOURCES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/RuntimeInfo.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/QtEnvironment.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/WindowsModuleEnumerator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/WindowsPeDependencyAnalyzer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/RuntimeDiagnostics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ReportExporter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/DataExporter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/DiagnosticSummarizer.cpp
+    PARENT_SCOPE
+)

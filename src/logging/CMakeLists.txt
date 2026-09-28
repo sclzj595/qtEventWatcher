@@ -1,0 +1,7 @@
+set(QT_EVENT_WATCHER_SOURCES
+    ${QT_EVENT_WATCHER_SOURCES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/WatchLogCapture.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/WatchRecordStore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/WatchLogger.cpp
+    PARENT_SCOPE
+)
