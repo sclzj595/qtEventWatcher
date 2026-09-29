@@ -52,6 +52,7 @@
   "smoke": {
     "exe": "TestEventWatcher.exe",
     "benchmarkExe": "BenchmarkEventWatcher.exe",
+    "unitExe": "UnitTests.exe",
     "_failHint": "冒烟以 exit=0 且输出无 FAIL 行为通过"
   }
 }

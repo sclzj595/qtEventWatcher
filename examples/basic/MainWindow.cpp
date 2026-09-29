@@ -214,12 +214,11 @@ namespace qt_event_watcher {
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
-{
     // 主题跟随系统（PRD 19 §9），accent 默认 Blue
-    m_theme = style_tokens::systemPrefersDark() ? QStringLiteral("dark")
-                                                : QStringLiteral("light");
-    m_accent = QString::fromLatin1(style_tokens::AccentBlue);
-
+    , m_theme(style_tokens::systemPrefersDark() ? QStringLiteral("dark")
+                                                : QStringLiteral("light"))
+    , m_accent(QString::fromLatin1(style_tokens::AccentBlue))
+{
     setWindowTitle(tr("QtEventWatcher Basic Demo"));
 
     // 慢事件演示源：周期 200ms，槽内阻塞 40ms（> SlowEventThresholdMs 30ms）
@@ -243,6 +242,7 @@ MainWindow::MainWindow(QWidget* parent)
     auto* moveTimer = new QTimer(this);
     connect(moveTimer, &QTimer::timeout, this, [this]() {
         QMouseEvent move(QEvent::MouseMove,
+                         QPointF(10.0, 10.0),
                          QPointF(10.0, 10.0),
                          Qt::NoButton, Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(this, &move);

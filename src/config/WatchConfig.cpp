@@ -461,7 +461,8 @@ void WatchConfig::loadValueFromEnvironment(const char *name, int &target, int fa
 	target = sanitizePositive(parsed, fallback);
 }
 
-void WatchConfig::loadValueFromEnvironment(const char *name, WatchFunMask &target, WatchFunMask fallback)
+void WatchConfig::loadValueFromEnvironment(const char *name, WatchFunMask &target,
+	[[maybe_unused]] WatchFunMask fallback)	// mask 解析失败保持调用方默认，无需 fallback（V6 Q2 C4100）
 {
 	const QByteArray value = qgetenv(name);
 	if (value.isEmpty())	return;
@@ -596,7 +597,8 @@ bool WatchConfig::reloadIfChanged()
 	// 重算 Default → Environment → INI，成功后一次性整体替换（PRD 11 §5.2/§5.3）
 	Values next;
 	applyEnvironmentToValues(next);
-	const bool fileLoaded = fi.isFile() ? applyIniFileToValues(iniPath, next) : true;
+	if (fi.isFile())
+		applyIniFileToValues(iniPath, next);
 
 	{
 		QWriteLocker locker(&m_lock);

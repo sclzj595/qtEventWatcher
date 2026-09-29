@@ -53,12 +53,13 @@ QString RuntimeInfo::detectCompilerVersion()
 {
 #if defined(_MSC_VER)
 	// _MSC_VER：1900=VS2015，1910~1919=VS2017，1920~1929=VS2019，1930+=VS2022
-	const int v = _MSC_VER;
-	if (v >= 1930)	return QStringLiteral("VS2022 (%1)").arg(v);
-	if (v >= 1920)	return QStringLiteral("VS2019 (%1)").arg(v);
-	if (v >= 1910)	return QStringLiteral("VS2017 (%1)").arg(v);
-	if (v >= 1900)	return QStringLiteral("VS2015 (%1)").arg(v);
-	return QString::number(v);
+	// if constexpr：_MSC_VER 是编译期常量，运行时 if 会触发 C4127（V6 Q2）
+	constexpr int v = _MSC_VER;
+	if constexpr (v >= 1930)		return QStringLiteral("VS2022 (%1)").arg(v);
+	else if constexpr (v >= 1920)	return QStringLiteral("VS2019 (%1)").arg(v);
+	else if constexpr (v >= 1910)	return QStringLiteral("VS2017 (%1)").arg(v);
+	else if constexpr (v >= 1900)	return QStringLiteral("VS2015 (%1)").arg(v);
+	else							return QString::number(v);
 #elif defined(__GNUC__)
 	return QStringLiteral("%1.%2.%3")
 		.arg(__GNUC__).arg(__GNUC_MINOR__).arg(__GNUC_PATCHLEVEL__);

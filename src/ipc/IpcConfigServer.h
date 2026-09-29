@@ -45,7 +45,7 @@ public:
 	/// 监听名：显式参数 > 环境变量 QT_EVENT_WATCHER_IPC_NAME > QtEventWatcher.<pid>
 	bool start(const QString& name = {}, QString* error = nullptr);
 
-	QString serverName() const;
+	const QString& serverName() const;
 
 private:
 	void onNewConnection();

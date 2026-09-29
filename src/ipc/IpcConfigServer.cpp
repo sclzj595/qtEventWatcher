@@ -95,7 +95,7 @@ bool IpcConfigServer::start(const QString& name, QString* error)
 	return true;
 }
 
-QString IpcConfigServer::serverName() const
+const QString& IpcConfigServer::serverName() const
 {
 	return m_serverName;
 }

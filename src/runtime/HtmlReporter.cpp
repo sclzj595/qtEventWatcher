@@ -52,24 +52,6 @@ const char* kindBadgeClass(int kind)
 	}
 }
 
-const char* severityTag(int severity)
-{
-	switch (severity) {
-	case 2:		return "CRITICAL";
-	case 1:		return "WARNING";
-	default:	return "INFO";
-	}
-}
-
-const char* severityBadgeClass(int severity)
-{
-	switch (severity) {
-	case 2:		return "badge-sev-critical";
-	case 1:		return "badge-sev-warning";
-	default:	return "badge-sev-info";
-	}
-}
-
 const std::string* findField(const std::vector<WatchRecordStore::Field>& fields,
 							 const char* key)
 {

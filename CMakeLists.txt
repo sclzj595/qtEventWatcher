@@ -30,10 +30,15 @@ if (MSVC)
     add_compile_options(
         /MP              # 并行编译
         /utf-8           # 源码 UTF-8（含中文注释）
-        /W3
+        /W4              # V6 Q2：最高常规告警级（清零守门）
     )
     # Release 下消除 CRT 安全告警
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+endif ()
+
+# V6 Q2：GCC/MinGW 告警收紧（Qt 头经 imported target -isystem 不受影响）
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    add_compile_options(-Wall -Wextra)
 endif ()
 
 

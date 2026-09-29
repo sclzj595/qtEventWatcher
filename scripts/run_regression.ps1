@@ -75,6 +75,7 @@ foreach ($m in $cfg.matrices) {
 
     if ($buildStatus -eq 'FAIL') {
         $results.Add([pscustomobject]@{ matrix = $m.name; step = 'smoke'; status = 'SKIP'; detail = 'build failed' })
+        $results.Add([pscustomobject]@{ matrix = $m.name; step = 'unit'; status = 'SKIP'; detail = 'build failed' })
         $results.Add([pscustomobject]@{ matrix = $m.name; step = 'benchmark'; status = 'SKIP'; detail = 'build failed' })
         continue
     }
@@ -89,6 +90,20 @@ foreach ($m in $cfg.matrices) {
         matrix = $m.name; step = 'smoke'
         status = if ($smokeOk) { 'PASS' } else { 'FAIL' }
         detail = ($failLines -join ' | ')
+    })
+
+    # ---- 单元测试（V6 Q1：纯逻辑断言，exit=0 即全过）----
+    $unitExe = Join-Path $exeDir $cfg.smoke.unitExe
+    $unitOut = & $unitExe 2>&1
+    $unitFailLines = @($unitOut | Where-Object { $_ -match '\[FAIL\]' } | Select-Object -First 2)
+    $unitOk = ($LASTEXITCODE -eq 0)
+    $unitDetail = if ($unitOk) {
+        ($unitOut | Where-Object { $_ -match '^checks=' } | Select-Object -First 1)
+    } else { $unitFailLines -join ' | ' }
+    $results.Add([pscustomobject]@{
+        matrix = $m.name; step = 'unit'
+        status = if ($unitOk) { 'PASS' } else { 'FAIL' }
+        detail = [string]$unitDetail
     })
 
     # ---- benchmark ----

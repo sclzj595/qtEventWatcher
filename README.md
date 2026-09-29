@@ -6,6 +6,9 @@
 [![Qt](https://img.shields.io/badge/Qt-5.15%20%7C%206.5-41cd52.svg)](https://www.qt.io/)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20MSVC%20%7C%20MinGW-lightgrey.svg)](docs/02_需求范围与版本矩阵.md)
 [![standard](https://img.shields.io/badge/C%2B%2B-17-00599c.svg)](CMakeLists.txt)
+[![tests](https://img.shields.io/badge/tests-25%20cases%20%2F%2096%20checks-2ea44f.svg)](tests/unit/UnitTests.cpp)
+[![static analysis](https://img.shields.io/badge/cppcheck%20%2F%20W4-0%20findings-2ea44f.svg)](scripts/static-check.ps1)
+[![sanitizer](https://img.shields.io/badge/ASan-0%20reports-2ea44f.svg)](docs/21_版本规划与交付物.md)
 
 > 仓库描述（复制到 Gitee/GitHub 仓库设置 → 基本信息 → 仓库描述，推荐 Topics：`qt` `cpp` `performance` `profiler` `anr` `desktop`）：
 
@@ -138,6 +141,8 @@ ctest -C Release                                        # 冒烟测试（在 bui
 
 ## Roadmap
 
+- [ ] **V6 质量证明线**：纯逻辑单元测试 + 静态分析门禁 + ASan 实证（[docs/31](docs/31_V6实施计划.md)）
+- [ ] **Scout 外部探针（产品线 B）**：进程外检测任意桌面程序（Electron/WPF/Win32）的窗口冻结与热点，Electron 经 CDP 拿 renderer 精确卡顿，统一汇入 aggregator 报告
 - [ ] Linux 验证（可移植性已在代码层预留，等环境）
 - [ ] QML/Qt Quick 事件路径支持（当前面向 Widgets）
 - [ ] 火焰图导出（调用栈数据已具备，缺渲染端）

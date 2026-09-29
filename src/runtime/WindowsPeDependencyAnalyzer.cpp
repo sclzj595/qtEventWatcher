@@ -4,7 +4,9 @@
 
 #ifdef Q_OS_WIN
 
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 
 #include <QFile>
@@ -75,7 +77,8 @@ QStringList PeDependencyAnalyzer::readImports(const QString& exePath, bool& ok, 
 	}
 
 	const qint64 peOff = dos.e_lfanew;
-	if (peOff <= 0 || peOff + 4 + sizeof(IMAGE_FILE_HEADER) > pe.size()) {
+	const qint64 headerEnd = peOff + 4 + static_cast<qint64>(sizeof(IMAGE_FILE_HEADER));	// 全 qint64 消 C4018（V6 Q2）
+	if (peOff <= 0 || headerEnd > pe.size()) {
 		failReason = QStringLiteral("bad PE header offset");
 		return imports;
 	}

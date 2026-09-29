@@ -17,8 +17,8 @@ namespace qt_event_watcher
 
 MetaCallWatcher::MetaCallWatcher(WatchConfig *watchConfig)
 	: m_config(watchConfig)
+	, m_filter(std::make_unique<MetaCallFilter>())
 {
-	m_filter = std::make_unique<MetaCallFilter>();
 
 	// 仅在启动时 Bit1 开启才安装发射回调：
 	// spy 回调进程级唯一（与 QSignalSpy 类工具互斥），安装状态以启动配置为准

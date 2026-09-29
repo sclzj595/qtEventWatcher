@@ -3,7 +3,12 @@ build/
 build-qt6/
 build-mingw5/
 build-mingw6/
+build-asan/
 out/
+
+# VS 链接副产物（PDB 合并临时文件）
+vc140.pdb
+vc*.pdb
 
 # 运行期产物
 logs/
