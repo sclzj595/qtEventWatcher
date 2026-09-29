@@ -201,6 +201,15 @@ bool IpcConfigServer::applySet(const QJsonObject& obj)
 				[this](int v) { m_config->setQssFrequentCountThreshold(v); });
 	applyNumber(obj, "configPollIntervalMs", "configPollIntervalMs",
 				[this](int v) { m_config->setConfigPollIntervalMs(v); });
+	applyNumber(obj, "alarmSuppressWindowMs", "alarmSuppressWindowMs",
+				[this](int v) { m_config->setAlarmSuppressWindowMs(v); });	// V4 B1
+	applyNumber(obj, "stackCaptureMode", "stackCaptureMode",
+				[this](int v) { m_config->setStackCaptureMode(v); });		// V4 B2
+	applyNumber(obj, "uplinkFlushMs", "uplinkFlushMs",
+				[this](int v) { m_config->setUplinkFlushMs(v); });			// V4 D1
+	// V4 D1：上行连接名（空串 = 关闭，CusApplication configTimer 回调收尾）
+	if (obj.contains(QStringLiteral("uplinkName")))
+		m_config->setUplinkName(obj.value(QStringLiteral("uplinkName")).toString());
 	return true;
 }
 
@@ -261,6 +270,10 @@ QJsonObject IpcConfigServer::configSnapshot() const
 		snap.insert(QStringLiteral("qssFrequentCountThreshold"),
 					m_config->qssFrequentCountThreshold());
 		snap.insert(QStringLiteral("configPollIntervalMs"), m_config->configPollIntervalMs());
+		snap.insert(QStringLiteral("alarmSuppressWindowMs"), m_config->alarmSuppressWindowMs());	// V4 B1
+		snap.insert(QStringLiteral("stackCaptureMode"), m_config->stackCaptureMode());			// V4 B2
+		snap.insert(QStringLiteral("uplinkName"), m_config->uplinkName());						// V4 D1
+		snap.insert(QStringLiteral("uplinkFlushMs"), m_config->uplinkFlushMs());
 	}
 	snap.insert(QStringLiteral("filterAvailable"), m_filter != nullptr);
 	return snap;

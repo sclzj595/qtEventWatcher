@@ -36,12 +36,14 @@ public:
 		WatchMetaCall			= 1u << 1,	// WatchFun_MetaCall
 		WatchEventStatistics	= 1u << 2,	// WatchFun_EventStat 周期统计
 		WatchQssMonitor			= 1u << 3,	// WatchFun_QssMonitor QSS 加载/样式/高频刷新
+		WatchFreeze				= 1u << 4,	// WatchFun_Freeze UI 冻结看门狗（V3 B 线）
 
 		WatchAll =
 			WatchEvent          |
 			WatchMetaCall       |
 			WatchEventStatistics |
-			WatchQssMonitor
+			WatchQssMonitor     |
+			WatchFreeze
 	};
 
 	// default conf
@@ -55,6 +57,16 @@ public:
     static constexpr int DefaultSetStyleSheetThresholdMs = 30;
     static constexpr int DefaultQssFrequentCountThreshold = 10;
     static constexpr int DefaultConfigPollIntervalMs = 60000;
+    static constexpr int DefaultFreezeThresholdMs = 2000;      ///< 心跳停滞超过该值判定冻结（V3 B 线）
+    static constexpr int DefaultHeartbeatIntervalMs = 250;     ///< 主线程心跳周期
+    static constexpr int DefaultAlarmSuppressWindowMs = 1000;  ///< 告警风暴抑制窗口（V4 B1，原 V3 A2 编译期常量）
+    /// 调用栈采集时机（V4 B2）：0=阈值命中即采（默认，记录全量含 frames）
+    /// 1=仅窗口首条采（被抑制条免采，其记录无 frames 字段——记录完整性换风暴期 CPU）
+    /// 2=关闭栈采集（所有告警记录无 frames）
+    static constexpr int DefaultStackCaptureMode = 0;
+    /// 上行链路（V4 D1 多进程聚合）：服务名非空即启用（连接 aggregator 的
+    /// QLocalServer），空 = 关闭；flush 周期毫秒（差量拉取 WatchRecordStore）
+    static constexpr int DefaultUplinkFlushMs = 200;
 
 public:
 	WatchConfig();
@@ -150,6 +162,23 @@ public:
     int configPollIntervalMs() const;
     void setConfigPollIntervalMs(int value);
 
+    int freezeThresholdMs() const;
+    void setFreezeThresholdMs(int value);
+
+    int heartbeatIntervalMs() const;
+    void setHeartbeatIntervalMs(int value);
+
+    int alarmSuppressWindowMs() const;
+    void setAlarmSuppressWindowMs(int value);
+
+    int stackCaptureMode() const;
+    void setStackCaptureMode(int value);
+
+    QString uplinkName() const;
+    void setUplinkName(const QString &name);
+    int uplinkFlushMs() const;
+    void setUplinkFlushMs(int value);
+
 	/// Reset 
 	void reset();	// 编译期默认值
 
@@ -165,6 +194,12 @@ private:
         int setStyleSheetThresholdMs = DefaultSetStyleSheetThresholdMs;
         int qssFrequentCountThreshold = DefaultQssFrequentCountThreshold;
         int configPollIntervalMs = DefaultConfigPollIntervalMs;
+        int freezeThresholdMs = DefaultFreezeThresholdMs;
+        int heartbeatIntervalMs = DefaultHeartbeatIntervalMs;
+        int alarmSuppressWindowMs = DefaultAlarmSuppressWindowMs;
+        int stackCaptureMode = DefaultStackCaptureMode;
+        QString uplinkName;                                 ///< 空 = 关闭上行链路（V4 D1）
+        int uplinkFlushMs = DefaultUplinkFlushMs;
 	};
 
 private:

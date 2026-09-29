@@ -1,0 +1,18 @@
+# QtEventWatcherConfig.cmake（V4 C2，configure_package_config_file 生成）
+# 消费方：find_package(QtEventWatcher REQUIRED) → 链接 QtEventWatcher::QtEventWatcherCore
+
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Qt 运行组件（导出树版本已定：Qt5/Qt6 二选一，静态库 ABI 互斥——
+# 配置期由 QT_VERSION_MAJOR 展开，消费方 Qt 版本不匹配时此处直接报错）
+find_dependency(Qt@QT_VERSION_MAJOR@ COMPONENTS Core Widgets Network Sql)
+
+# spdlog 随主包安装（自带 spdlogConfig.cmake）；消费方若已提供 spdlog
+# target（自行 add_subdirectory / find_package），现有目标优先不受影响
+find_dependency(spdlog CONFIG)
+
+include("${CMAKE_CURRENT_LIST_DIR}/QtEventWatcherTargets.cmake")
+
+check_required_components(QtEventWatcher)

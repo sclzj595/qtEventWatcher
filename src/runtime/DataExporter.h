@@ -15,8 +15,10 @@ class EventStatistics;
  * 中的全量结构化记录（慢事件 / MetaCall）与 EventStatistics 周期统计
  * （TOP-N / 分位数），面向外部回放分析。
  *
- * 格式由文件后缀决定：.json → 结构化 JSON（含统计段）；.csv（或其余后缀）
- * → 宽表 CSV（仅事件记录，回放格式稳定）。仅在用户/测试显式调用时执行，
+ * 格式由文件后缀决定（大小写不敏感）：
+ * .json → 结构化 JSON（含统计段）；.csv → 宽表 CSV（仅事件记录）；
+ * .db / .sqlite → SQLite 持久化（V3 C1：meta / records / frames / statistics
+ * 四表，可 SQL 回放查询）；其余后缀 → 宽表 CSV。仅在用户/测试显式调用时执行，
  * 不进入监控热路径。
  */
 class DataExporter

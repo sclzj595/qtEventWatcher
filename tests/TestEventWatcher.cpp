@@ -4,8 +4,12 @@
 
 #include "ReportExporter.h"
 #include "RuntimeDiagnostics.h"
+#include "AlarmSuppressor.h"
+#include "EventWatchdog.h"
+#include "StackCapture.h"
 #include "WatchConfig.h"
 #include "DataExporter.h"
+#include "HtmlReporter.h"
 #include "DiagnosticSummarizer.h"
 #include "EventStatistics.h"
 #include "IpcConfigServer.h"
@@ -23,6 +27,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocalSocket>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QThread>
 #include <QTimer>
 #include <memory>
@@ -113,6 +119,35 @@ int main(int argc, char* argv[])
     if (!report.dependencies.ok)                               ++failures;
     if (report.dependencies.dependencies.isEmpty())            ++failures;
     if (!qt5CoreLoaded)                                        ++failures;
+
+    // ---- 调用栈采集（V3 A1）：capture 自检 + 帧格式断言 ----
+    {
+        const std::vector<StackFrame> frames = StackCapture::capture();
+        const std::string stackText = StackCapture::format(frames);
+#ifdef _WIN32
+        // 栈顶帧在本测试 exe 模块内，模块名非空；格式形如 mod!0x...
+        const std::size_t comma = stackText.find(',');
+        const std::string top = stackText.substr(0, comma == std::string::npos
+                                                     ? std::string::npos : comma);
+        const bool topOk = top.find('!') != std::string::npos
+            && top.find("0x") != std::string::npos;
+        if (frames.empty() || frames.front().module.empty() || !topOk) {
+            std::cout << "  [STACK CAPTURE FAIL] frames=" << frames.size()
+                      << " top=" << top << std::endl;
+            ++failures;
+        } else {
+            std::cout << "  stack capture: " << frames.size()
+                      << " frames, top=" << top << std::endl;
+        }
+#else
+        if (!frames.empty() || !stackText.empty()) {
+            std::cout << "  [STACK CAPTURE FAIL] non-Windows must be empty" << std::endl;
+            ++failures;
+        } else {
+            std::cout << "  stack capture: empty (non-Windows)" << std::endl;
+        }
+#endif
+    }
 
     // ---- 报告导出（PRD 17 §5）：TXT + JSON 双格式 ----
     const QString txtPath = QStringLiteral("diag_report_test.txt");
@@ -220,14 +255,19 @@ int main(int argc, char* argv[])
         QEW_LOG_WARN("[MetaCallWatcher] slow MetaCall sender= signal= signalId=-1 senderThread=0x0 "
                      "receiver=MainWindow object= recvThread=0x1 curThread=0x1 match=- "
                      "costMs=42.000 thresholdMs=1");
+        // V3 A1：带调用栈的记录（帧串无空格 token，行尾追加）
+        QEW_LOG_WARN("[EventWatcher] slow event receiver=QLabel object=lb event=Timer "
+                     "type=1 depth=0 costMs=75.250 exclusiveCostMs=75.000 curThread=0x1 "
+                     "recvThread=0x1 match=true thresholdMs=30 "
+                     "stack=TestApp.exe!0x1234,CoreLib.dll!0x5678");
         // 非目标前缀（INFO 级 / 前缀不匹配）不得采集
         QEW_LOG_INFO("[EventStatistics] period report count=10");
         QEW_LOG_WARN("[MetaCallWatcher] signal spy callbacks hijacked/uninstalled, "
                      "sender identity degraded to empty fields");
 
         const std::size_t stored = WatchRecordStore::instance().count();
-        if (stored != 3) {
-            std::cout << "  [RECORD COUNT FAIL] stored=" << stored << " expected=3" << std::endl;
+        if (stored != 4) {
+            std::cout << "  [RECORD COUNT FAIL] stored=" << stored << " expected=4" << std::endl;
             ++failures;
         }
 
@@ -242,13 +282,14 @@ int main(int argc, char* argv[])
                 csv = cf.readAll();
             const int rows = csv.count('\n');
             const bool utf8Bom = csv.startsWith("\xEF\xBB\xBF");
-            if (rows != 4 || !csv.contains("slowEvent") || !csv.contains("metaCall")
-                || !csv.contains("123.500") || !utf8Bom) {
+            if (rows != 5 || !csv.contains("slowEvent") || !csv.contains("metaCall")
+                || !csv.contains("123.500") || !csv.contains("TestApp.exe!0x1234")
+                || !utf8Bom) {
                 std::cout << "  [DATA CSV CONTENT FAIL] rows=" << rows
                           << " bom=" << utf8Bom << std::endl;
                 ++failures;
             } else {
-                std::cout << "  csv data: " << rows - 1 << " rows, utf8+bom" << std::endl;
+                std::cout << "  csv data: " << rows - 1 << " rows, stack col, utf8+bom" << std::endl;
             }
             cf.close();
             QFile::remove(csvPath);
@@ -268,24 +309,116 @@ int main(int argc, char* argv[])
             const QJsonObject counts = dataRoot.value("counts").toObject();
             const QJsonArray recs = dataRoot.value("records").toArray();
             const QJsonObject meta = recs.at(2).toObject().value("fields").toObject();
-            const bool csvOk = counts.value("slowEvents").toInt() == 2
+            const bool csvOk = counts.value("slowEvents").toInt() == 3
                 && counts.value("metaCalls").toInt() == 1;
             const bool fieldsOk = meta.value("signal").toString() == "timeout()"
                 || meta.value("signal").toString().isEmpty();	// 空值记录字段可缺省
             const bool typedOk = recs.at(0).toObject().value("fields").toObject()
                                      .value("costMs").toDouble() == 123.5;
-            if (dataDoc.isNull() || !csvOk || !fieldsOk || !typedOk) {
+            // V3 A1：frames 数组结构化断言（module 字符串 + offset 数值化）
+            const QJsonArray frames = recs.at(3).toObject().value("frames").toArray();
+            const QJsonObject frame0 = frames.at(0).toObject();
+            const bool framesOk = frames.size() == 2
+                && frame0.value("module").toString() == "TestApp.exe"
+                && frame0.value("offset").toDouble() == 0x1234
+                && frames.at(1).toObject().value("module").toString() == "CoreLib.dll"
+                && frames.at(1).toObject().value("offset").toDouble() == 0x5678;
+            if (dataDoc.isNull() || !csvOk || !fieldsOk || !typedOk || !framesOk) {
                 std::cout << "  [DATA JSON CONTENT FAIL] parse=" << !dataDoc.isNull()
                           << " counts=" << csvOk << " fields=" << fieldsOk
-                          << " typed=" << typedOk << std::endl;
+                          << " typed=" << typedOk << " frames=" << framesOk << std::endl;
                 ++failures;
             } else {
                 std::cout << "  json data: slowEvents=" << counts.value("slowEvents").toInt()
                           << " metaCalls=" << counts.value("metaCalls").toInt()
-                          << " typedFields=OK" << std::endl;
+                          << " typedFields=OK frames=OK" << std::endl;
             }
             df.close();
             QFile::remove(dataJsonPath);
+        }
+
+        // ---- V3 C1：SQLite 持久化导出 → QSqlDatabase 回读断言 ----
+        const QString dbPath = QStringLiteral("data_export_test.db");
+        if (!DataExporter::exportData(dbPath, nullptr, nullptr, &exportError)) {
+            std::cout << "  [DATA SQLITE FAIL] " << exportError.toStdString() << std::endl;
+            ++failures;
+        } else {
+            bool dbOk = true;
+            int recCount = -1;
+            int frameCount = -1;
+            double cost0 = -1.0;
+            int metaRows = -1;
+            {
+                QSqlDatabase db = QSqlDatabase::addDatabase(
+                    QStringLiteral("QSQLITE"), QStringLiteral("qew_smoke"));
+                db.setDatabaseName(dbPath);
+                dbOk = db.open();
+                if (dbOk) {
+                    QSqlQuery q(db);
+                    q.exec(QStringLiteral("SELECT COUNT(*) FROM records"));
+                    recCount = q.next() ? q.value(0).toInt() : -1;
+                    q.exec(QStringLiteral("SELECT COUNT(*) FROM frames"));
+                    frameCount = q.next() ? q.value(0).toInt() : -1;
+                    // 记录 0 的 costMs 类型化回读（123.5）
+                    q.exec(QStringLiteral(
+                        "SELECT costMs FROM records WHERE id = 1"));
+                    cost0 = q.next() ? q.value(0).toDouble() : -1.0;
+                    q.exec(QStringLiteral(
+                        "SELECT COUNT(*) FROM records WHERE kind = 'metaCall'"));
+                    metaRows = q.next() ? q.value(0).toInt() : -1;
+                    // meta 表计数段与 JSON 同源
+                    q.exec(QStringLiteral(
+                        "SELECT value FROM meta WHERE key = 'counts.metaCalls'"));
+                    const int metaKey = q.next() ? q.value(0).toInt() : -1;
+                    if (recCount != 4 || frameCount != 2 || cost0 != 123.5
+                        || metaRows != 1 || metaKey != 1) {
+                        std::cout << "  [DATA SQLITE CONTENT FAIL] rec=" << recCount
+                                  << " frames=" << frameCount << " cost=" << cost0
+                                  << " metaRows=" << metaRows
+                                  << " metaKey=" << metaKey << std::endl;
+                        dbOk = false;
+                    } else {
+                        std::cout << "  sqlite data: rec=" << recCount
+                                  << " frames=" << frameCount
+                                  << " typedCost=OK meta=OK" << std::endl;
+                    }
+                } else {
+                    std::cout << "  [DATA SQLITE OPEN FAIL]" << std::endl;
+                }
+                db.close();
+            }
+            QSqlDatabase::removeDatabase(QStringLiteral("qew_smoke"));
+            if (!dbOk)
+                ++failures;
+            QFile::remove(dbPath);
+        }
+
+        // ---- V3 C2：HTML 报告导出 → 章节结构 + 无 JS 断言 ----
+        const QString htmlPath = QStringLiteral("data_export_test.html");
+        if (!HtmlReporter::exportHtml(htmlPath, nullptr, nullptr, &exportError)) {
+            std::cout << "  [HTML EXPORT FAIL] " << exportError.toStdString() << std::endl;
+            ++failures;
+        } else {
+            QFile hf(htmlPath);
+            QByteArray htmlBytes;
+            if (hf.open(QIODevice::ReadOnly))
+                htmlBytes = hf.readAll();
+            const QString htmlText = QString::fromUtf8(htmlBytes);
+            const bool htmlOk = htmlText.startsWith(QStringLiteral("<!DOCTYPE html>"))
+                && htmlText.contains(QStringLiteral("诊断结论"))
+                && htmlText.contains(QStringLiteral("统计 TOP"))
+                && htmlText.contains(QStringLiteral("明细记录"))
+                && htmlText.contains(QStringLiteral("QPushButton"))
+                && htmlText.contains(QStringLiteral("badge-freeze"))
+                && !htmlText.contains(QStringLiteral("<script"));
+            if (!htmlOk) {
+                std::cout << "  [HTML CONTENT FAIL]" << std::endl;
+                ++failures;
+            } else {
+                std::cout << "  html report: sections=OK badges=OK no-js" << std::endl;
+            }
+            hf.close();
+            QFile::remove(htmlPath);
         }
         QDir(logDir).removeRecursively();
     }
@@ -638,6 +771,161 @@ int main(int argc, char* argv[])
         } else {
             std::cout << "  exclusive agg: total=3.001ms exclTotal=2.1005ms exclMax=1.5ms"
                       << std::endl;
+        }
+    }
+
+    // ---- 告警风暴抑制（V3 A2）：窗口决策 + 存储全量 + 级别路由 ----
+    {
+        // 合成时钟决策：首条必出 → 窗口内静默 → 过期冲刷；独立 key 互不影响
+        AlarmSuppressor sup;
+        const std::string key = "QPushButton|Timer";
+        const AlarmDecision d0 = sup.evaluate(key, 0, AlarmSuppressor::kWindowMs);		// 首条必出
+        const AlarmDecision d1 = sup.evaluate(key, 200, AlarmSuppressor::kWindowMs);	// 窗口内静默
+        const AlarmDecision d2 = sup.evaluate(key, 999, AlarmSuppressor::kWindowMs);	// 窗口内静默
+        const AlarmDecision d3 = sup.evaluate(key, 1000, AlarmSuppressor::kWindowMs);	// 窗口关闭：冲刷 2 条
+        const AlarmDecision d4 = sup.evaluate("Other|1", 300, AlarmSuppressor::kWindowMs);	// 独立 key 首条必出
+        const bool decisionOk = d0.emitNow && d0.suppressedFlushed == 0
+            && !d1.emitNow && !d2.emitNow
+            && d3.emitNow && d3.suppressedFlushed == 2
+            && d4.emitNow;
+
+        // V4 B1：自定义窗口参数（100ms 窗口，150ms 处应冲刷并开新窗）
+        AlarmSuppressor supWin;
+        const AlarmDecision w0 = supWin.evaluate("W|1", 0, 100);	// 首条
+        const AlarmDecision w1 = supWin.evaluate("W|1", 50, 100);	// 窗口内静默
+        const AlarmDecision w2 = supWin.evaluate("W|1", 150, 100);	// 窗口关闭：冲刷 1 条
+        const AlarmDecision w3 = supWin.evaluate("W|1", 200, 100);	// 仍在新窗（100ms 窗口内）静默
+        const bool windowOk = w0.emitNow && !w1.emitNow
+            && w2.emitNow && w2.suppressedFlushed == 1
+            && !w3.emitNow;
+        // 非法窗口回退缺省（<=0 → 1000ms：50ms 处应仍在缺省窗口内静默）
+        AlarmSuppressor supBad;
+        const AlarmDecision b0 = supBad.evaluate("B|1", 0, 0);
+        const AlarmDecision b1 = supBad.evaluate("B|1", 50, -5);
+        const bool badOk = b0.emitNow && !b1.emitNow;
+        // V4 B1：WatchConfig 三通道 setter 往返 + 非法值 sanitize
+        WatchConfig cfgWin;
+        cfgWin.setAlarmSuppressWindowMs(1500);
+        const bool cfgOk = cfgWin.alarmSuppressWindowMs() == 1500;
+        cfgWin.setAlarmSuppressWindowMs(0);		// 非法 → 回退默认 1000
+        const bool cfgSanitizeOk = cfgWin.alarmSuppressWindowMs() == WatchConfig::DefaultAlarmSuppressWindowMs;
+        // V4 B2：StackCaptureMode 0/1/2 之外回退默认
+        cfgWin.setStackCaptureMode(1);
+        const bool modeOk = cfgWin.stackCaptureMode() == 1;
+        cfgWin.setStackCaptureMode(7);
+        const bool modeClampOk = cfgWin.stackCaptureMode() == WatchConfig::DefaultStackCaptureMode;
+        if (!decisionOk) {
+            std::cout << "  [SUPPRESSOR DECISION FAIL] d0=" << d0.emitNow
+                      << " d1=" << d1.emitNow << " d2=" << d2.emitNow
+                      << " d3=" << d3.emitNow << " flushed=" << d3.suppressedFlushed
+                      << " d4=" << d4.emitNow
+                      << " windowOk=" << windowOk << " badOk=" << badOk << std::endl;
+            ++failures;
+        } else if (!windowOk || !badOk || !cfgOk || !cfgSanitizeOk || !modeOk || !modeClampOk) {
+            std::cout << "  [SUPPRESSOR WINDOW FAIL] windowOk=" << windowOk
+                      << " w2flushed=" << w2.suppressedFlushed
+                      << " badOk=" << badOk
+                      << " cfgOk=" << cfgOk << " cfgSanitizeOk=" << cfgSanitizeOk
+                      << " modeOk=" << modeOk << " modeClampOk=" << modeClampOk << std::endl;
+            ++failures;
+        }
+
+        // 存储全量：WARN 首条 + 3 条 DEBUG 静默条均被 RecordSink 采集
+        // （logger 门已放宽至 debug；文件/控制台 sink 按用户级别 WARN 去重）
+        const std::size_t before = WatchRecordStore::instance().count();
+        QEW_LOG_WARN("[EventWatcher] slow event receiver=StormBtn object=s event=Timer "
+                     "type=1 depth=0 costMs=50.000 exclusiveCostMs=50.000 curThread=0x1 "
+                     "recvThread=0x1 match=true thresholdMs=30 stack=TestApp.exe!0x1");
+        for (int i = 0; i < 3; ++i) {
+            QEW_LOG_DEBUG("[EventWatcher] slow event receiver=StormBtn object=s event=Timer "
+                          "type=1 depth=0 costMs=50.000 exclusiveCostMs=50.000 curThread=0x1 "
+                          "recvThread=0x1 match=true thresholdMs=30 stack=TestApp.exe!0x2");
+        }
+        const std::size_t after = WatchRecordStore::instance().count();
+        const bool fullOk = after - before == 4;
+        // INFO 级仍不得采集（前缀匹配但级别/语义不符的存量约束）
+        QEW_LOG_INFO("[EventWatcher] alarm storm receiver=StormBtn suppressed=99 windowMs=1000");
+        const std::size_t afterInfo = WatchRecordStore::instance().count();
+        const bool infoExcluded = afterInfo == after;
+        if (!fullOk || !infoExcluded) {
+            std::cout << "  [SUPPRESSOR STORE FAIL] delta=" << (after - before)
+                      << " expected=4 infoExcluded=" << infoExcluded << std::endl;
+            ++failures;
+        } else {
+            std::cout << "  alarm suppressor: decision OK, store full-retention 4/4" << std::endl;
+        }
+    }
+
+    // ---- 冻结看门狗（V3 B）：心跳停滞检测 + 取证快照 + 恢复报告 ----
+    {
+        WatchConfig fzConfig;
+        fzConfig.setWatchFun(16);	// WatchFreeze（bit4）
+        fzConfig.setFreezeThresholdMs(200);
+        fzConfig.setHeartbeatIntervalMs(50);
+        EventWatchdog dog(&fzConfig);
+        dog.start();
+
+        // 正常心跳 4×50ms（基线稳定，不触发）
+        for (int i = 0; i < 4; ++i) {
+            dog.beat();
+            QThread::msleep(50);
+        }
+        const std::size_t before = WatchRecordStore::instance().count();
+
+        // 冻结取证：快照"正在处理的事件"后心跳停滞 600ms（> 200ms 阈值）
+        QEvent noneEvent(QEvent::None);
+        dog.eventStarted(nullptr, &noneEvent);
+        QThread::msleep(600);
+        dog.eventFinished();
+        dog.beat();
+        QThread::msleep(150);	// 等待 recovered 输出（轮询粒度 100ms）；窗口须
+        QThread::msleep(40);	// < threshold(200ms)：无心跳的等待本身即"冻结"
+
+        // 快照前先关开关：等窗口内无心跳的时长不受 threshold 约束（慢机 sleep
+        // 超标也不抢跑）；关闭分支刷基线，后续关门断言窗口零竞态
+        fzConfig.setWatchFun(0);
+        QThread::msleep(150);
+        const auto records = WatchRecordStore::instance().snapshot();
+        int started = 0;
+        int ongoing = 0;
+        int recovered = 0;
+        for (const auto& r : records) {
+            if (r.kind != WatchRecordStore::KindFreeze)	continue;
+            if (r.raw.find("freeze started ") != std::string::npos) {
+                ++started;
+                // 取证快照：receiver=(unknown) type=0（QEvent::None）
+                const bool snapOk = r.raw.find("receiver=(unknown)") != std::string::npos
+                    && r.raw.find("type=0 ") != std::string::npos;
+                if (!snapOk)	std::cout << "  [FREEZE SNAP FAIL] " << r.raw << std::endl;
+            }
+            if (r.raw.find("freeze ongoing ") != std::string::npos)		++ongoing;
+            if (r.raw.find("freeze recovered ") != std::string::npos)	++recovered;
+        }
+        // started ≥1 + recovered ≥1 必现；ongoing 因 600ms 冻结跨 1s 节流边界而不定
+        const bool flowOk = started >= 1 && recovered >= 1
+            && started + ongoing + recovered == static_cast<int>(records.size() - before);
+        if (!flowOk) {
+            std::cout << "  [FREEZE FLOW FAIL] started=" << started
+                      << " ongoing=" << ongoing << " recovered=" << recovered
+                      << " delta=" << (records.size() - before) << std::endl;
+            ++failures;
+        } else {
+            std::cout << "  freeze watchdog: started=" << started
+                      << " ongoing=" << ongoing << " recovered=" << recovered << std::endl;
+        }
+
+        // 开关已关（快照前置）：心跳停滞不再产生新记录
+        dog.eventStarted(nullptr, nullptr);
+        QThread::msleep(300);
+        dog.eventFinished();
+        const std::size_t afterOff = WatchRecordStore::instance().count();
+        dog.stop();
+        if (afterOff != records.size()) {
+            std::cout << "  [FREEZE GATE FAIL] off-delta=" << (afterOff - records.size())
+                      << std::endl;
+            ++failures;
+        } else {
+            std::cout << "  freeze gate: disabled -> silent OK" << std::endl;
         }
     }
 

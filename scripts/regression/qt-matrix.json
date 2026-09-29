@@ -1,0 +1,57 @@
+{
+  "_comment": "V4 A1 四矩阵定义。envPath 顺序即 PATH 前置顺序（Qt bin 在前，工具链 bin 在后）；config 仅 MSVC 多配置生成器需要；exeDir 为 TestEventWatcher.exe / BenchmarkEventWatcher.exe 所在目录（相对仓库根）。",
+  "matrices": [
+    {
+      "name": "qt5152-msvc",
+      "buildDir": "build",
+      "config": "Release",
+      "envPath": [
+        "F:\\IDE.2\\Qt5.15.2\\5.15.2\\msvc2019_64\\bin"
+      ],
+      "exeDir": "build/bin/Release"
+    },
+    {
+      "name": "qt653-msvc",
+      "buildDir": "build-qt6",
+      "config": "Release",
+      "envPath": [
+        "F:\\IDE.2\\QT\\6.5.3\\msvc2019_64\\bin"
+      ],
+      "exeDir": "build-qt6/bin/Release"
+    },
+    {
+      "name": "qt5152-mingw",
+      "buildDir": "build-mingw5",
+      "config": null,
+      "envPath": [
+        "F:\\IDE.2\\Qt5.15.2\\Tools\\mingw810_64\\bin",
+        "F:\\IDE.2\\Qt5.15.2\\5.15.2\\mingw81_64\\bin"
+      ],
+      "exeDir": "build-mingw5/bin"
+    },
+    {
+      "name": "qt653-mingw",
+      "buildDir": "build-mingw6",
+      "config": null,
+      "envPath": [
+        "F:\\IDE.2\\QT\\Tools\\mingw1120_64\\bin",
+        "F:\\IDE.2\\QT\\6.5.3\\mingw_64\\bin"
+      ],
+      "exeDir": "build-mingw6/bin"
+    }
+  ],
+  "benchmark": {
+    "quickModes": ["off", "slow"],
+    "fullModes": ["off", "event", "slow", "metacall_on", "metacall_off"],
+    "_quickNote": "快速档覆盖 ① 常驻(off) / ② 正常(slow 的 plain) / ③ 抑制+首条告警(slow)；event 与 metacall 模式仅在 -Full 下运行",
+    "driftTolerance": 0.25,
+    "_driftNote": "单次运行噪声实测 <10%，±25% 留余量；DRIFT 仅提示，-Strict 才阻断",
+    "excludeScenarios": ["busy-user-event-alert-first", "busy-user-event-alert"],
+    "_excludeNote": "alert-first 为 5 次迭代微样本粗测（V3 D1 场景），运行间波动 ±30% 属正常；busy-user-event-alert 的 delta_avg 在噪声态下单次摆动可达 ±40%（V5 A3 实测 12~25µs 跨容差带），两者均不参与漂移判定——③ 告警路径的数字由 docs/22 逐版本多轮复测守门"
+  },
+  "smoke": {
+    "exe": "TestEventWatcher.exe",
+    "benchmarkExe": "BenchmarkEventWatcher.exe",
+    "_failHint": "冒烟以 exit=0 且输出无 FAIL 行为通过"
+  }
+}

@@ -4,6 +4,7 @@
 #include "QssStyleWatcher.h"
 #include "ReportExporter.h"
 #include "DataExporter.h"
+#include "HtmlReporter.h"
 #include "DiagnosticSummarizer.h"
 #include "RuntimeDiagnostics.h"
 #include "StyleTokens.h"
@@ -468,6 +469,12 @@ void MainWindow::buildUi()
     connect(exportDataAction, &QAction::triggered, this, &MainWindow::exportData);
     addAction(exportDataAction);
 
+    // HTML 报告（V3 C2）：Ctrl+Shift+H 导出自包含静态报告
+    auto* exportHtmlAction = new QAction(this);
+    exportHtmlAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+H")));
+    connect(exportHtmlAction, &QAction::triggered, this, &MainWindow::exportHtmlReport);
+    addAction(exportHtmlAction);
+
     setCentralWidget(central);
     resize(1024, 720);
 }
@@ -574,6 +581,11 @@ QWidget* MainWindow::buildRuntimePage()
     exportDataButton->setToolTip(tr("导出慢事件与 MetaCall 全量记录 .csv / .json（Ctrl+Shift+E）"));
     connect(exportDataButton, &QPushButton::clicked, this, &MainWindow::exportData);
 
+    // HTML 报告（V3 C2）：自包含静态报告（概览/诊断/统计/冻结/明细，零外部依赖）
+    auto* exportHtmlButton = new QPushButton(tr("HTML 报告"), card);
+    exportHtmlButton->setToolTip(tr("导出自包含 HTML 性能报告（Ctrl+Shift+H）"));
+    connect(exportHtmlButton, &QPushButton::clicked, this, &MainWindow::exportHtmlReport);
+
     // 诊断摘要（V2 A3）：规则化归因结果直接显示在下方文本区
     auto* summaryButton = new QPushButton(tr("诊断摘要"), card);
     summaryButton->setToolTip(tr("基于已捕获数据生成性能诊断摘要（主线程阻塞 TOP / 高频信号 / QSS 抖动）"));
@@ -582,6 +594,7 @@ QWidget* MainWindow::buildRuntimePage()
     buttonRow->addWidget(fullButton);
     buttonRow->addWidget(exportButton);
     buttonRow->addWidget(exportDataButton);
+    buttonRow->addWidget(exportHtmlButton);
     buttonRow->addWidget(summaryButton);
     buttonRow->addStretch(1);
     cardLayout->addLayout(buttonRow);
@@ -637,9 +650,16 @@ QWidget* MainWindow::buildTestPage()
     auto* nestedButton = new QPushButton(tr("制造嵌套事件"), triggerCard);
     connect(nestedButton, &QPushButton::clicked, this, &triggerNestedEvent);
 
+    auto* freezeButton = new QPushButton(tr("制造 UI 冻结 3s"), triggerCard);
+    freezeButton->setToolTip(tr("主线程 Sleep 3s：心跳停跳 → FreezeWatch started/ongoing/recovered（V3 B 线）"));
+    connect(freezeButton, &QPushButton::clicked, this, []() {
+        QThread::msleep(3000);	// 心跳（250ms）停跳超 2s 阈值 → bit4 三态告警
+    });
+
     triggerLayout->addWidget(slowEventButton);
     triggerLayout->addWidget(slowMetaCallButton);
     triggerLayout->addWidget(nestedButton);
+    triggerLayout->addWidget(freezeButton);
     triggerLayout->addStretch(1);
     layout->addWidget(triggerCard);
 
@@ -787,6 +807,28 @@ void MainWindow::exportData()
 
     if (m_diagHint != nullptr) {
         m_diagHint->setText(ok ? tr("✓ 数据已导出 %1").arg(filePath)
+                               : tr("✗ 导出失败：%1").arg(error));
+    }
+}
+
+void MainWindow::exportHtmlReport()
+{
+    // V3 C2：自包含 HTML 性能报告（概览/诊断结论/统计 TOP/冻结时间线/明细）
+    const QString filePath = QFileDialog::getSaveFileName(
+        this, tr("导出 HTML 报告"), QStringLiteral("QtEventWatcherReport"),
+        tr("HTML 报告 (*.html)"));
+    if (filePath.isEmpty())
+        return;
+
+    const auto* app = static_cast<const CusApplication*>(QCoreApplication::instance());
+    QString error;
+    const bool ok = HtmlReporter::exportHtml(filePath,
+                                             app ? app->watchConfig() : nullptr,
+                                             app ? app->eventStatistics() : nullptr,
+                                             &error);
+
+    if (m_diagHint != nullptr) {
+        m_diagHint->setText(ok ? tr("✓ HTML 报告已导出 %1").arg(filePath)
                                : tr("✗ 导出失败：%1").arg(error));
     }
 }

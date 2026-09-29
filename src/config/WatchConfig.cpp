@@ -22,6 +22,12 @@ constexpr char EnvQssLoadThresholdMs[]          = "QT_EVENT_WATCHER_QSS_LOAD_THR
 constexpr char EnvSetStyleSheetThresholdMs[]    = "QT_EVENT_WATCHER_SET_STYLESHEET_THRESHOLD_MS";
 constexpr char EnvQssFrequentCountThreshold[]   = "QT_EVENT_WATCHER_QSS_FREQUENT_COUNT_THRESHOLD";
 constexpr char EnvConfigPollIntervalMs[]        = "QT_EVENT_WATCHER_CONFIG_POLL_INTERVAL_MS";
+constexpr char EnvFreezeThresholdMs[]           = "QT_EVENT_WATCHER_FREEZE_THRESHOLD_MS";
+constexpr char EnvHeartbeatIntervalMs[]         = "QT_EVENT_WATCHER_HEARTBEAT_INTERVAL_MS";
+constexpr char EnvAlarmSuppressWindowMs[]       = "QT_EVENT_WATCHER_ALARM_SUPPRESS_WINDOW_MS";
+constexpr char EnvStackCaptureMode[]            = "QT_EVENT_WATCHER_STACK_CAPTURE_MODE";
+constexpr char EnvUplinkName[]                  = "QT_EVENT_WATCHER_UPLINK_NAME";
+constexpr char EnvUplinkFlushMs[]               = "QT_EVENT_WATCHER_UPLINK_FLUSH_MS";
 constexpr char KeyWatchFun[]                    = "Watch_Fun";
 constexpr char KeySlowEventThresholdMs[]        = "SlowEventThresholdMs";
 constexpr char KeySlowMetaCallThresholdMs[]     = "SlowMetaCallThresholdMs";
@@ -32,6 +38,12 @@ constexpr char KeyQssLoadThresholdMs[]          = "QssLoadThresholdMs";
 constexpr char KeySetStyleSheetThresholdMs[]    = "SetStyleSheetThresholdMs";
 constexpr char KeyQssFrequentCountThreshold[]   = "QssFrequentCountThreshold";
 constexpr char KeyConfigPollIntervalMs[]        = "ConfigPollIntervalMs";
+constexpr char KeyFreezeThresholdMs[]           = "FreezeThresholdMs";
+constexpr char KeyHeartbeatIntervalMs[]         = "HeartbeatIntervalMs";
+constexpr char KeyAlarmSuppressWindowMs[]       = "AlarmSuppressWindowMs";
+constexpr char KeyStackCaptureMode[]            = "StackCaptureMode";
+constexpr char KeyUplinkName[]                  = "UplinkName";
+constexpr char KeyUplinkFlushMs[]               = "UplinkFlushMs";
 
 } // namespace
 
@@ -98,6 +110,35 @@ bool WatchConfig::loadFromFile(const QString &filePath)
             const int value = settings.value(QString::fromLatin1(KeyConfigPollIntervalMs), m_values.configPollIntervalMs).toInt();
             m_values.configPollIntervalMs = sanitizePositive(value, DefaultConfigPollIntervalMs);
         }
+
+        if (settings.contains(QString::fromLatin1(KeyFreezeThresholdMs))) {
+            const int value = settings.value(QString::fromLatin1(KeyFreezeThresholdMs), m_values.freezeThresholdMs).toInt();
+            m_values.freezeThresholdMs = sanitizePositive(value, DefaultFreezeThresholdMs);
+        }
+
+        if (settings.contains(QString::fromLatin1(KeyHeartbeatIntervalMs))) {
+            const int value = settings.value(QString::fromLatin1(KeyHeartbeatIntervalMs), m_values.heartbeatIntervalMs).toInt();
+            m_values.heartbeatIntervalMs = sanitizePositive(value, DefaultHeartbeatIntervalMs);
+        }
+
+        if (settings.contains(QString::fromLatin1(KeyAlarmSuppressWindowMs))) {
+            const int value = settings.value(QString::fromLatin1(KeyAlarmSuppressWindowMs), m_values.alarmSuppressWindowMs).toInt();
+            m_values.alarmSuppressWindowMs = sanitizePositive(value, DefaultAlarmSuppressWindowMs);
+        }
+
+        if (settings.contains(QString::fromLatin1(KeyStackCaptureMode))) {
+            const int value = settings.value(QString::fromLatin1(KeyStackCaptureMode), m_values.stackCaptureMode).toInt();
+            m_values.stackCaptureMode = (value >= 0 && value <= 2) ? value : DefaultStackCaptureMode;
+        }
+
+        // V4 D1：上行链路（名字空串 = 关闭）
+        if (settings.contains(QString::fromLatin1(KeyUplinkName))) {
+            m_values.uplinkName = settings.value(QString::fromLatin1(KeyUplinkName)).toString().trimmed();
+        }
+        if (settings.contains(QString::fromLatin1(KeyUplinkFlushMs))) {
+            const int value = settings.value(QString::fromLatin1(KeyUplinkFlushMs), m_values.uplinkFlushMs).toInt();
+            m_values.uplinkFlushMs = sanitizePositive(value, DefaultUplinkFlushMs);
+        }
 	}
 
 	settings.endGroup();
@@ -118,6 +159,22 @@ void WatchConfig::loadFromEnvironment()
     loadValueFromEnvironment(EnvSetStyleSheetThresholdMs,  m_values.setStyleSheetThresholdMs, DefaultSetStyleSheetThresholdMs);
     loadValueFromEnvironment(EnvQssFrequentCountThreshold, m_values.qssFrequentCountThreshold, DefaultQssFrequentCountThreshold);
     loadValueFromEnvironment(EnvConfigPollIntervalMs,      m_values.configPollIntervalMs, DefaultConfigPollIntervalMs);
+    loadValueFromEnvironment(EnvFreezeThresholdMs,         m_values.freezeThresholdMs, DefaultFreezeThresholdMs);
+    loadValueFromEnvironment(EnvHeartbeatIntervalMs,       m_values.heartbeatIntervalMs, DefaultHeartbeatIntervalMs);
+    loadValueFromEnvironment(EnvAlarmSuppressWindowMs,     m_values.alarmSuppressWindowMs, DefaultAlarmSuppressWindowMs);
+    // StackCaptureMode：0/1/2 之外回退默认（手工 clamp，env 加载器只提供 int 通道）
+    {
+        int mode = DefaultStackCaptureMode;
+        loadValueFromEnvironment(EnvStackCaptureMode, mode, DefaultStackCaptureMode);
+        m_values.stackCaptureMode = (mode >= 0 && mode <= 2) ? mode : DefaultStackCaptureMode;
+    }
+    // V4 D1：上行链路（名字非空才覆盖，空 env 不关闭已加载的 INI 配置）
+    {
+        const QString name = qEnvironmentVariable(EnvUplinkName);
+        if (!name.isEmpty())
+            m_values.uplinkName = name.trimmed();
+        loadValueFromEnvironment(EnvUplinkFlushMs, m_values.uplinkFlushMs, DefaultUplinkFlushMs);
+    }
 }
 
 bool WatchConfig::load(const QString &filePath)
@@ -304,6 +361,78 @@ void WatchConfig::setConfigPollIntervalMs(int value)
     m_values.configPollIntervalMs = sanitizePositive(value, DefaultConfigPollIntervalMs);
 }
 
+int WatchConfig::freezeThresholdMs() const
+{
+	QReadLocker locker(&m_lock);
+	return m_values.freezeThresholdMs;
+}
+
+void WatchConfig::setFreezeThresholdMs(int value)
+{
+	QWriteLocker locker(&m_lock);
+	m_values.freezeThresholdMs = sanitizePositive(value, DefaultFreezeThresholdMs);
+}
+
+int WatchConfig::heartbeatIntervalMs() const
+{
+	QReadLocker locker(&m_lock);
+	return m_values.heartbeatIntervalMs;
+}
+
+void WatchConfig::setHeartbeatIntervalMs(int value)
+{
+	QWriteLocker locker(&m_lock);
+	m_values.heartbeatIntervalMs = sanitizePositive(value, DefaultHeartbeatIntervalMs);
+}
+
+int WatchConfig::alarmSuppressWindowMs() const
+{
+	QReadLocker locker(&m_lock);
+	return m_values.alarmSuppressWindowMs;
+}
+
+void WatchConfig::setAlarmSuppressWindowMs(int value)
+{
+	QWriteLocker locker(&m_lock);
+	m_values.alarmSuppressWindowMs = sanitizePositive(value, DefaultAlarmSuppressWindowMs);
+}
+
+int WatchConfig::stackCaptureMode() const
+{
+	QReadLocker locker(&m_lock);
+	return m_values.stackCaptureMode;
+}
+
+void WatchConfig::setStackCaptureMode(int value)
+{
+	QWriteLocker locker(&m_lock);
+	m_values.stackCaptureMode = (value >= 0 && value <= 2) ? value : DefaultStackCaptureMode;
+}
+
+QString WatchConfig::uplinkName() const
+{
+	QReadLocker locker(&m_lock);
+	return m_values.uplinkName;
+}
+
+void WatchConfig::setUplinkName(const QString &name)
+{
+	QWriteLocker locker(&m_lock);
+	m_values.uplinkName = name.trimmed();	// 空串 = 关闭上行链路
+}
+
+int WatchConfig::uplinkFlushMs() const
+{
+	QReadLocker locker(&m_lock);
+	return m_values.uplinkFlushMs;
+}
+
+void WatchConfig::setUplinkFlushMs(int value)
+{
+	QWriteLocker locker(&m_lock);
+	m_values.uplinkFlushMs = sanitizePositive(value, DefaultUplinkFlushMs);
+}
+
 void WatchConfig::reset()
 {
 	QWriteLocker locker(&m_lock);
@@ -371,6 +500,21 @@ void WatchConfig::applyEnvironmentToValues(Values &next)
 	loadValueFromEnvironment(EnvSetStyleSheetThresholdMs,  next.setStyleSheetThresholdMs, DefaultSetStyleSheetThresholdMs);
 	loadValueFromEnvironment(EnvQssFrequentCountThreshold, next.qssFrequentCountThreshold, DefaultQssFrequentCountThreshold);
 	loadValueFromEnvironment(EnvConfigPollIntervalMs,      next.configPollIntervalMs, DefaultConfigPollIntervalMs);
+	loadValueFromEnvironment(EnvFreezeThresholdMs,         next.freezeThresholdMs, DefaultFreezeThresholdMs);
+	loadValueFromEnvironment(EnvHeartbeatIntervalMs,       next.heartbeatIntervalMs, DefaultHeartbeatIntervalMs);
+	loadValueFromEnvironment(EnvAlarmSuppressWindowMs,     next.alarmSuppressWindowMs, DefaultAlarmSuppressWindowMs);
+	{
+		int mode = DefaultStackCaptureMode;
+		loadValueFromEnvironment(EnvStackCaptureMode, mode, DefaultStackCaptureMode);
+		next.stackCaptureMode = (mode >= 0 && mode <= 2) ? mode : DefaultStackCaptureMode;
+	}
+	// V4 D1：上行链路（名字非空才覆盖）
+	{
+		const QString name = qEnvironmentVariable(EnvUplinkName);
+		if (!name.isEmpty())
+			next.uplinkName = name.trimmed();
+		loadValueFromEnvironment(EnvUplinkFlushMs, next.uplinkFlushMs, DefaultUplinkFlushMs);
+	}
 }
 
 bool WatchConfig::applyIniFileToValues(const QString &filePath, Values &next)
@@ -414,6 +558,21 @@ bool WatchConfig::applyIniFileToValues(const QString &filePath, Values &next)
 	readPositive(KeySetStyleSheetThresholdMs,  next.setStyleSheetThresholdMs, DefaultSetStyleSheetThresholdMs);
 	readPositive(KeyQssFrequentCountThreshold, next.qssFrequentCountThreshold, DefaultQssFrequentCountThreshold);
 	readPositive(KeyConfigPollIntervalMs,      next.configPollIntervalMs, DefaultConfigPollIntervalMs);
+	readPositive(KeyFreezeThresholdMs,         next.freezeThresholdMs, DefaultFreezeThresholdMs);
+	readPositive(KeyHeartbeatIntervalMs,       next.heartbeatIntervalMs, DefaultHeartbeatIntervalMs);
+	readPositive(KeyAlarmSuppressWindowMs,     next.alarmSuppressWindowMs, DefaultAlarmSuppressWindowMs);
+	if (settings.contains(QString::fromLatin1(KeyStackCaptureMode))) {
+		const int value = settings.value(QString::fromLatin1(KeyStackCaptureMode), next.stackCaptureMode).toInt();
+		next.stackCaptureMode = (value >= 0 && value <= 2) ? value : DefaultStackCaptureMode;
+	}
+	// V4 D1：上行链路
+	if (settings.contains(QString::fromLatin1(KeyUplinkName))) {
+		next.uplinkName = settings.value(QString::fromLatin1(KeyUplinkName)).toString().trimmed();
+	}
+	if (settings.contains(QString::fromLatin1(KeyUplinkFlushMs))) {
+		const int value = settings.value(QString::fromLatin1(KeyUplinkFlushMs), next.uplinkFlushMs).toInt();
+		next.uplinkFlushMs = sanitizePositive(value, DefaultUplinkFlushMs);
+	}
 
 	settings.endGroup();
 	return settings.status() == QSettings::NoError;

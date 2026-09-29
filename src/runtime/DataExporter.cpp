@@ -10,7 +10,11 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
 #include <QTextStream>
+#include <QVariant>
 
 #include <algorithm>
 
@@ -27,6 +31,7 @@ const char* kindName(int kind)
 	switch (kind) {
 	case WatchRecordStore::KindMetaCall:	return "metaCall";
 	case WatchRecordStore::KindQss:			return "qss";
+	case WatchRecordStore::KindFreeze:		return "freeze";
 	default:								return "slowEvent";
 	}
 }
@@ -56,11 +61,13 @@ QString csvCell(const QString& value)
 }
 
 /// 宽表列序（两类记录共用，N/A 留空；CSV 无嵌套能力，signal/receiver 并列展开）
+/// V3 A1：行尾追加 stack 列（模块!偏移帧串；按表头解析的既有消费方不受影响）
 const char* const kCsvColumns[] = {
 	"time", "kind", "receiver", "object", "event",
 	"sender", "signal", "signalId", "depth",
 	"costMs", "exclusiveCostMs", "thresholdMs",
 	"curThread", "recvThread", "senderThread", "match",
+	"stack",
 };
 constexpr int kCsvColumnCount = sizeof(kCsvColumns) / sizeof(kCsvColumns[0]);
 
@@ -112,6 +119,7 @@ bool exportCsv(const QString& filePath, QString* error)
 			   << "," << csvCell(cell("recvThread"))
 			   << "," << csvCell(cell("senderThread"))
 			   << "," << csvCell(cell("match"))
+			   << "," << csvCell(cell("stack"))
 			   << "\n";
 	}
 	return true;
@@ -179,9 +187,11 @@ bool exportJson(const QString& filePath, const WatchConfig* config,
 
 	int slowEvents = 0;
 	int metaCalls = 0;
+	int freezeEvents = 0;
 	QJsonArray recordArray;
 	for (const WatchRecordStore::Record& r : records) {
 		if (r.kind == WatchRecordStore::KindMetaCall)	++metaCalls;
+		else if (r.kind == WatchRecordStore::KindFreeze)	++freezeEvents;
 		else											++slowEvents;
 
 		QJsonObject entry;
@@ -191,6 +201,15 @@ bool exportJson(const QString& filePath, const WatchConfig* config,
 		for (const Field& f : r.fields)
 			fields.insert(QString::fromStdString(f.first), typedField(f.first, f.second));
 		entry.insert(QStringLiteral("fields"), fields);
+		// V3 A1：调用栈帧数组（模块!偏移；offset 数值化，符号解析放离线工具）
+		QJsonArray frames;
+		for (const WatchRecordStore::Frame& fr : r.frames) {
+			QJsonObject frame;
+			frame.insert(QStringLiteral("module"), QString::fromStdString(fr.module));
+			frame.insert(QStringLiteral("offset"), static_cast<double>(fr.offset));
+			frames.append(frame);
+		}
+		entry.insert(QStringLiteral("frames"), frames);
 		entry.insert(QStringLiteral("raw"), QString::fromStdString(r.raw));
 		recordArray.append(entry);
 	}
@@ -202,6 +221,7 @@ bool exportJson(const QString& filePath, const WatchConfig* config,
 	QJsonObject counts;
 	counts.insert(QStringLiteral("slowEvents"), slowEvents);
 	counts.insert(QStringLiteral("metaCalls"), metaCalls);
+	counts.insert(QStringLiteral("freezeEvents"), freezeEvents);
 	root.insert(QStringLiteral("counts"), counts);
 
 	if (config != nullptr) {
@@ -240,6 +260,248 @@ bool exportJson(const QString& filePath, const WatchConfig* config,
 	return true;
 }
 
+/// SQLite 字段值类型化（与 typedField 同规则：耗时→REAL，深度/signalId→INTEGER）
+QVariant typedVariant(const std::string& key, const std::string& value)
+{
+	const QString k = QString::fromStdString(key);
+	const QString v = QString::fromStdString(value);
+	bool ok = false;
+	if (k == QLatin1String("costMs") || k == QLatin1String("exclusiveCostMs") ||
+		k == QLatin1String("thresholdMs")) {
+		const double d = v.toDouble(&ok);
+		if (ok)		return d;
+	} else if (k == QLatin1String("depth") || k == QLatin1String("signalId")) {
+		const int i = v.toInt(&ok);
+		if (ok)		return i;
+	}
+	return v;
+}
+
+/// SQLite 持久化（V3 C1）：meta/records/frames/statistics 四表，单次落盘。
+/// 连接生命周期严格限定在本函数（创建线程 = 调用线程，QSqlDatabase 线程约束）；
+/// 事务包裹全部写入（数百条记录 <10ms）；失败即删半成品文件，不留脏库
+bool exportSqlite(const QString& filePath, const WatchConfig* config,
+				  const EventStatistics* statistics, QString* error)
+{
+	if (!QSqlDatabase::isDriverAvailable(QStringLiteral("QSQLITE"))) {
+		if (error)	*error = QStringLiteral("QSQLITE driver not available "
+											   "(plugins/sqldrivers missing)");
+		return false;
+	}
+
+	// 全量重建语义（与 CSV/JSON 一致）：先清掉旧文件，避免残留旧表干扰回放
+	QFile::remove(filePath);
+
+	const std::vector<WatchRecordStore::Record> records = WatchRecordStore::instance().snapshot();
+
+	int slowEvents = 0;
+	int metaCalls = 0;
+	int freezeEvents = 0;
+	for (const WatchRecordStore::Record& r : records) {
+		if (r.kind == WatchRecordStore::KindMetaCall)		++metaCalls;
+		else if (r.kind == WatchRecordStore::KindFreeze)	++freezeEvents;
+		else												++slowEvents;
+	}
+
+	const QString connName = QStringLiteral("QtEventWatcher_Export");
+	bool ok = true;		// 作用域覆盖整个导出流程（块外失败清理需访问）
+	{
+		QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connName);
+		db.setDatabaseName(filePath);
+		if (!db.open()) {
+			if (error)	*error = QStringLiteral("cannot open database: %1")
+										.arg(db.lastError().text());
+			return false;
+		}
+
+		// 四表 schema：meta（KV 元信息）/ records（宽表事件记录）/ frames
+		//（调用栈帧，recordId 外键）/ statistics（周期统计行，含分位数）
+		const char* const kSchema[] = {
+			"CREATE TABLE meta ("
+			"key TEXT PRIMARY KEY,"
+			"value TEXT NOT NULL)",
+			"CREATE TABLE records ("
+			"id INTEGER PRIMARY KEY AUTOINCREMENT,"
+			"kind TEXT NOT NULL,"
+			"time TEXT,"
+			"receiver TEXT, object TEXT, event TEXT,"
+			"sender TEXT, signal TEXT, signalId INTEGER, depth INTEGER,"
+			"costMs REAL, exclusiveCostMs REAL, thresholdMs REAL,"
+			"curThread TEXT, recvThread TEXT, senderThread TEXT, match TEXT,"
+			"stack TEXT,"
+			"raw TEXT)",
+			"CREATE TABLE frames ("
+			"recordId INTEGER NOT NULL,"
+			"idx INTEGER NOT NULL,"
+			"module TEXT,"
+			"offset INTEGER)",
+			"CREATE INDEX IF NOT EXISTS idx_frames_record ON frames(recordId)",
+			"CREATE TABLE statistics ("
+			"periodIdx INTEGER NOT NULL,"
+			"isLive INTEGER NOT NULL,"
+			"periodMs INTEGER,"
+			"event TEXT NOT NULL,"
+			"count INTEGER,"
+			"totalCostMs REAL, maxCostMs REAL,"
+			"exclusiveTotalMs REAL, exclusiveMaxMs REAL,"
+			"p50Ms REAL, p99Ms REAL, p999Ms REAL)",
+		};
+
+		ok = db.transaction();
+		for (const char* sql : kSchema) {
+			QSqlQuery query(db);
+			if (!query.exec(QString::fromLatin1(sql))) {
+				ok = false;
+				if (error)	*error = QStringLiteral("create schema failed: %1")
+											.arg(query.lastError().text());
+				break;
+			}
+		}
+
+		if (ok) {
+			// meta 段：格式版本 / 导出时刻 / 计数 / 监控配置（JSON 同源字段）
+			QSqlQuery metaQuery(db);
+			metaQuery.prepare(QStringLiteral(
+				"INSERT INTO meta (key, value) VALUES (?, ?)"));
+			const auto putMeta = [&metaQuery](const char* key, const QVariant& value) {
+				metaQuery.addBindValue(QString::fromLatin1(key));
+				metaQuery.addBindValue(value);
+				metaQuery.exec();
+			};
+			putMeta("formatVersion", 1);
+			putMeta("exportedAt", QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
+			putMeta("counts.slowEvents", slowEvents);
+			putMeta("counts.metaCalls", metaCalls);
+			putMeta("counts.freezeEvents", freezeEvents);
+			putMeta("counts.total", static_cast<int>(records.size()));
+			if (config != nullptr) {
+				putMeta("monitor.watchFun",
+						QString::asprintf("0x%02x", config->watchFun()));
+				putMeta("monitor.slowEventThresholdMs", config->slowEventThresholdMs());
+				putMeta("monitor.slowMetaCallThresholdMs", config->slowMetaCallThresholdMs());
+			}
+
+			// records + frames：缺失字段绑 NULL（QVariant()），字段值类型化
+			QSqlQuery recordQuery(db);
+			recordQuery.prepare(QStringLiteral(
+				"INSERT INTO records (kind, time, receiver, object, event, sender, signal,"
+				" signalId, depth, costMs, exclusiveCostMs, thresholdMs,"
+				" curThread, recvThread, senderThread, match, stack, raw)"
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+			QSqlQuery frameQuery(db);
+			frameQuery.prepare(QStringLiteral(
+				"INSERT INTO frames (recordId, idx, module, offset) VALUES (?, ?, ?, ?)"));
+
+			for (const WatchRecordStore::Record& r : records) {
+				const auto cell = [&r](const char* key) -> QVariant {
+					const std::string* v = findField(r.fields, key);
+					return v != nullptr ? typedVariant(key, *v) : QVariant();
+				};
+				recordQuery.addBindValue(QString::fromLatin1(kindName(r.kind)));
+				recordQuery.addBindValue(QString::fromStdString(r.time));
+				recordQuery.addBindValue(cell("receiver"));
+				recordQuery.addBindValue(cell("object"));
+				recordQuery.addBindValue(cell("event"));
+				recordQuery.addBindValue(cell("sender"));
+				recordQuery.addBindValue(cell("signal"));
+				recordQuery.addBindValue(cell("signalId"));
+				recordQuery.addBindValue(cell("depth"));
+				recordQuery.addBindValue(cell("costMs"));
+				recordQuery.addBindValue(cell("exclusiveCostMs"));
+				recordQuery.addBindValue(cell("thresholdMs"));
+				recordQuery.addBindValue(cell("curThread"));
+				recordQuery.addBindValue(cell("recvThread"));
+				recordQuery.addBindValue(cell("senderThread"));
+				recordQuery.addBindValue(cell("match"));
+				recordQuery.addBindValue(cell("stack"));
+				recordQuery.addBindValue(QString::fromStdString(r.raw));
+				if (!recordQuery.exec()) {
+					ok = false;
+					if (error)	*error = QStringLiteral("insert record failed: %1")
+												.arg(recordQuery.lastError().text());
+					break;
+				}
+
+				const QVariant recordId = recordQuery.lastInsertId();
+				for (std::size_t i = 0; i < r.frames.size(); ++i) {
+					frameQuery.addBindValue(recordId);
+					frameQuery.addBindValue(static_cast<int>(i));
+					frameQuery.addBindValue(QString::fromStdString(r.frames[i].module));
+					frameQuery.addBindValue(static_cast<qlonglong>(r.frames[i].offset));
+					if (!frameQuery.exec()) {
+						ok = false;
+						if (error)	*error = QStringLiteral("insert frame failed: %1")
+													.arg(frameQuery.lastError().text());
+						break;
+					}
+				}
+				if (!ok)	break;
+			}
+		}
+
+		if (ok && statistics != nullptr) {
+			// statistics：复用 periodToJson 的排序/分位计算，行化落盘
+			constexpr int kTopN = 20;
+			const auto dumpPeriod = [&](const EventStatistics::PeriodSnapshot& period,
+										int periodIdx, bool isLive) {
+				const QJsonArray top = periodToJson(period, kTopN)
+										   .value(QStringLiteral("top")).toArray();
+				QSqlQuery statQuery(db);
+				statQuery.prepare(QStringLiteral(
+					"INSERT INTO statistics (periodIdx, isLive, periodMs, event, count,"
+					" totalCostMs, maxCostMs, exclusiveTotalMs, exclusiveMaxMs,"
+					" p50Ms, p99Ms, p999Ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+				for (const QJsonValue& v : top) {
+					const QJsonObject e = v.toObject();
+					statQuery.addBindValue(periodIdx);
+					statQuery.addBindValue(isLive ? 1 : 0);
+					statQuery.addBindValue(period.periodMs);
+					statQuery.addBindValue(e.value(QStringLiteral("event")).toString());
+					statQuery.addBindValue(e.value(QStringLiteral("count")).toInt());
+					statQuery.addBindValue(e.value(QStringLiteral("totalCostMs")).toDouble());
+					statQuery.addBindValue(e.value(QStringLiteral("maxCostMs")).toDouble());
+					statQuery.addBindValue(e.value(QStringLiteral("exclusiveTotalMs")).toDouble());
+					statQuery.addBindValue(e.value(QStringLiteral("exclusiveMaxMs")).toDouble());
+					statQuery.addBindValue(e.value(QStringLiteral("p50Ms")).toDouble());
+					statQuery.addBindValue(e.value(QStringLiteral("p99Ms")).toDouble());
+					statQuery.addBindValue(e.value(QStringLiteral("p999Ms")).toDouble());
+					if (!statQuery.exec()) {
+						if (error)	*error = QStringLiteral("insert statistic failed: %1")
+													.arg(statQuery.lastError().text());
+						return false;
+					}
+				}
+				return true;
+			};
+
+			const QVector<EventStatistics::PeriodSnapshot> history =
+				statistics->statisticsHistory();
+			for (int i = 0; i < history.size() && ok; ++i)
+				ok = dumpPeriod(history.at(i), i, false);
+			if (ok) {
+				const EventStatistics::PeriodSnapshot live = statistics->liveSnapshot();
+				if (!live.entries.isEmpty())
+					ok = dumpPeriod(live, history.size(), true);
+			}
+		}
+
+		if (ok)
+			ok = db.commit();
+		else
+			db.rollback();
+
+		if (!ok && error != nullptr && error->isEmpty())
+			*error = QStringLiteral("sqlite export failed (transaction rolled back)");
+	}
+
+	QSqlDatabase::removeDatabase(connName);
+
+	// 失败清理：删除半成品文件，不留脏库误导回放方
+	if (!ok && QFile::exists(filePath))
+		QFile::remove(filePath);
+	return ok;
+}
+
 } // namespace
 
 bool DataExporter::exportData(const QString& filePath, const WatchConfig* config,
@@ -249,11 +511,17 @@ bool DataExporter::exportData(const QString& filePath, const WatchConfig* config
 		if (error)	*error = QStringLiteral("empty file path");
 		return false;
 	}
-	// 后缀决定格式（大小写不敏感）；非 json 后缀一律 CSV
+	// 后缀决定格式（大小写不敏感）：json → JSON；db/sqlite/sqlite3 → SQLite
+	//（V3 C1 持久化）；其余 → CSV
 	const QString suffix = QFileInfo(filePath).suffix();
-	const bool json = suffix.compare(QStringLiteral("json"), Qt::CaseInsensitive) == 0;
-	return json ? exportJson(filePath, config, statistics, error)
-				: exportCsv(filePath, error);
+	if (suffix.compare(QStringLiteral("json"), Qt::CaseInsensitive) == 0)
+		return exportJson(filePath, config, statistics, error);
+	if (suffix.compare(QStringLiteral("db"), Qt::CaseInsensitive) == 0 ||
+		suffix.compare(QStringLiteral("sqlite"), Qt::CaseInsensitive) == 0 ||
+		suffix.compare(QStringLiteral("sqlite3"), Qt::CaseInsensitive) == 0) {
+		return exportSqlite(filePath, config, statistics, error);
+	}
+	return exportCsv(filePath, error);
 }
 
 } // namespace qt_event_watcher

@@ -27,22 +27,35 @@ add_library(QtEventWatcherCore STATIC
 
 
 # ============================================================
-# Include Directories
+# Include Directories（V3 D2 API 收紧）
 # ============================================================
 
-# include/qt_event_watcher 存放真实公共头（WatchEventInfo.h）；
-# 内部模块目录在前，供实现文件以短名 include 各自模块头
+# 公共面只保留文档承诺的接入头：CusApplication.h（application）、
+# WatchLogger.h / WatchLogCapture.h（logging）、QssStyleWatcher.h（qss）、
+# WatchEventInfo.h（include/qt_event_watcher）。
+# V4 C1：config 从公共面移除——CusApplication.h 改 unique_ptr<WatchConfig>
+# 藏匿实现，WatchConfig.h 不再经公共头传播；内部实现目录（config、event
+# 看门狗/抑制器/栈采集、ipc 服务、runtime 记录存储/导出）一律 PRIVATE——
+# consumer 白盒需求（tests / benchmark / demo）由各自目标显式声明 include
+# 目录，不走库的公共传播。
 target_include_directories(QtEventWatcherCore
     PUBLIC
-        ${PROJECT_SOURCE_DIR}/src/application
+        # BUILD_INTERFACE 包装：install(EXPORT) 禁止 INTERFACE 属性携带
+        # 源码树前缀绝对路径（Ninja/MinGW 生成器硬校验）；安装态头统一在
+        # <prefix>/include（INSTALL_INTERFACE），扁平布局与构建态一致
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/application>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/logging>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/qss>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include/qt_event_watcher>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+)
+target_include_directories(QtEventWatcherCore
+    PRIVATE
         ${PROJECT_SOURCE_DIR}/src/config
         ${PROJECT_SOURCE_DIR}/src/event
         ${PROJECT_SOURCE_DIR}/src/ipc
-        ${PROJECT_SOURCE_DIR}/src/logging
-        ${PROJECT_SOURCE_DIR}/src/qss
         ${PROJECT_SOURCE_DIR}/src/runtime
-        ${PROJECT_SOURCE_DIR}/include/qt_event_watcher
-        ${PROJECT_SOURCE_DIR}/include
 )
 
 if (QT_VERSION_MAJOR EQUAL 6)
@@ -67,6 +80,7 @@ target_link_libraries(QtEventWatcherCore
         Qt${QT_VERSION_MAJOR}::Core
         Qt${QT_VERSION_MAJOR}::Widgets
         Qt${QT_VERSION_MAJOR}::Network
+        Qt${QT_VERSION_MAJOR}::Sql		# V3 C1：SQLite 持久化导出（QSQLITE 驱动随 Qt 发行）
         spdlog::spdlog
 )
 
@@ -76,17 +90,35 @@ if (WIN32)
     target_link_libraries(QtEventWatcherCore PRIVATE psapi)
 endif ()
 
+# V3 A2：风暴抑制静默条走 QEW_LOG_DEBUG（运行时门控）。spdlog 默认
+# SPDLOG_ACTIVE_LEVEL=INFO 会把 DEBUG 宏编译期剥离为空，必须显式放开；
+# PUBLIC 使测试/Demo 等 consumer TU 的宏展开同样生效
+target_compile_definitions(QtEventWatcherCore PUBLIC SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG)
+
 # ============================================================
-# Install
+# Install（V4 C2：find_package 分发模型）
 # ============================================================
 
-install(TARGETS QtEventWatcherCore
+install(TARGETS QtEventWatcherCore EXPORT QtEventWatcherTargets
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
 )
 
+install(EXPORT QtEventWatcherTargets
+    FILE QtEventWatcherTargets.cmake
+    NAMESPACE QtEventWatcher::
+    DESTINATION lib/cmake/QtEventWatcher
+)
+
+# 公共面头（application / logging / qss / include 四目录，V3 D2 定义的
+# 公共面）统一扁平安装到 include/ 根——与构建态扁平 include 形式一致，
+# 配合 INSTALL_INTERFACE:include；event / ipc / runtime / config 内部头
+# 一律不装——consumer 只允许接入头，白盒属主仓特权
 install(DIRECTORY
-    ${PROJECT_SOURCE_DIR}/include/qt_event_watcher
+    ${PROJECT_SOURCE_DIR}/src/application/
+    ${PROJECT_SOURCE_DIR}/src/logging/
+    ${PROJECT_SOURCE_DIR}/src/qss/
+    ${PROJECT_SOURCE_DIR}/include/qt_event_watcher/
     DESTINATION include
     FILES_MATCHING
         PATTERN "*.h"

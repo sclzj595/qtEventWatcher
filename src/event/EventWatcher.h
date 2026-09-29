@@ -4,11 +4,14 @@
 
 #include <QEvent>
 
+#include <memory>
+
 namespace qt_event_watcher
 {
-	
+
 class WatchConfig;
 class EventStatistics;
+class AlarmSuppressor;
 
 /// @brief Qt 基础监控器
 /**
@@ -22,6 +25,7 @@ class EventWatcher
 {
 public:
 	EventWatcher(WatchConfig* config, EventStatistics* statistics);
+	~EventWatcher();	// m_suppressor 为不完整类型，析构置于 .cpp
 
 	EventWatcher(const EventWatcher&) = delete;
 	EventWatcher& operator=(const EventWatcher&) = delete;
@@ -33,13 +37,14 @@ public:
 	bool isEnabled() const;
 
 private:
-	static QString eventName(QEvent::Type type);	
-	static QString receiverClassName(QObject* receiver);	
-	static QString receiverObjectName(QObject* receiver);	
+	static QString eventName(QEvent::Type type);
+	static QString receiverClassName(QObject* receiver);
+	static QString receiverObjectName(QObject* receiver);
 
 	WatchConfig* m_config = nullptr;
 	EventStatistics* m_statistics = nullptr;
-	
+	std::unique_ptr<AlarmSuppressor> m_suppressor;	///< V3 A2 告警风暴抑制（懒构造，仅告警路径访问）
+
 };
 
 

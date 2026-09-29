@@ -35,6 +35,7 @@ public:
 		CatMetaCall,
 		CatEventStat,
 		CatQss,
+		CatFreeze,		///< [FreezeWatch]（V3 B 线）
 		CatOther,
 		CatCount
 	};

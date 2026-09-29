@@ -1,0 +1,86 @@
+# V4 A2 CI 回归工作流
+# 定位：CI 兜底【编译 + 冒烟】——不跑 benchmark（共享 runner 噪声大，基线漂移检测
+# 只在本地 scripts/run_regression.ps1 做，见 docs/25 §3 A1）。
+# spdlog 为源码树内分发（third_party/spdlog-1.x），checkout 即有，无需安装。
+#
+# 矩阵说明：CI 只放 MSVC × 2 稳定组合；MinGW 矩阵（5.15.2/mingw81、6.5.3/mingw1120）
+# 因 aqt 工具名随版本漂移，留作注释模板——启用前以 `aqt list-qt windows desktop` 与
+# `aqt list-tool windows desktop tools_mingw81` 官方输出核对名称。
+# 本地全四矩阵回归以 scripts/run_regression.ps1 为准（qt-matrix.json 驱动）。
+
+name: regression
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: smoke (${{ matrix.name }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: qt5152-msvc
+            qtVersion: '5.15.2'
+            qtArch: win64_msvc2019_64
+          - name: qt653-msvc
+            qtVersion: '6.5.3'
+            qtArch: win64_msvc2019_64
+        # MinGW 模板（名称待 aqt 官方 list 核对后启用）：
+        # - name: qt5152-mingw
+        #   qtVersion: '5.15.2'
+        #   qtArch: win64_mingw81
+        #   toolVariant: tools_mingw81          # aqt install-tool 目录名
+        #   toolPackage: qt.tools.win64_mingw810
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt (${{ matrix.qtVersion }})
+        shell: pwsh
+        run: |
+          pip install aqtinstall
+          aqt install-qt windows desktop ${{ matrix.qtVersion }} ${{ matrix.qtArch }} --outputdir D:\Qt
+          # MinGW 矩阵启用时在此追加：
+          # aqt install-tool windows desktop ${{ matrix.toolVariant }} ${{ matrix.toolPackage }} --outputdir D:\Qt
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $qtBin = Get-ChildItem "D:\Qt\${{ matrix.qtVersion }}" -Recurse -Filter Qt${{ matrix.qtVersion }}Core.dll -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $qtBin) {
+            # Qt5Core/Qt6Core 命名差异兜底
+            $core = if ('${{ matrix.qtVersion }}' -like '5.*') { 'Qt5Core.dll' } else { 'Qt6Core.dll' }
+            $qtBin = Get-ChildItem "D:\Qt\${{ matrix.qtVersion }}" -Recurse -Filter $core | Select-Object -First 1
+          }
+          if (-not $qtBin) { throw "Qt runtime dll not found under D:\Qt\${{ matrix.qtVersion }}" }
+          $qtRoot = $qtBin.Directory.Parent.FullName     # ...\msvc2019_64
+          "QT_ROOT=$qtRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+          cmake -S . -B build-ci -DCMAKE_PREFIX_PATH="$qtRoot"
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build-ci --config Release --parallel
+
+      - name: Smoke
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:QT_ROOT\bin;$env:PATH"
+          $exe = Get-ChildItem build-ci -Recurse -Filter TestEventWatcher.exe | Select-Object -First 1
+          if (-not $exe) { throw "TestEventWatcher.exe not found" }
+          & $exe.FullName 2>&1 | Tee-Object smoke.log
+          if ($LASTEXITCODE -ne 0) { throw "smoke exit=$LASTEXITCODE" }
+          if (Select-String -Path smoke.log -Pattern 'FAIL' -Quiet) { throw "smoke reported FAIL lines" }
+
+      - name: Upload smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.name }}
+          path: smoke.log
+          if-no-files-found: ignore

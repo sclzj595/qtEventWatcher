@@ -1,8 +1,10 @@
 #include "MetaCallWatcher.h"
 
+#include "AlarmSuppressor.h"
 #include "MetaCallFilter.h"
 #include "MetaCallParser.h"
 #include "MetaCallSenderRegistry.h"
+#include "StackCapture.h"
 #include "WatchConfig.h"
 #include "WatchLogMacros.h"
 
@@ -94,6 +96,12 @@ void MetaCallWatcher::process(QObject *receiver, QEvent *event, std::int64_t ela
 		return;
 
 	const double elapsedMs = static_cast<double>(elapsedNs) / 1000000.0;
+	// V4 B2：栈采集时机（与 EventWatcher 同构）——0=命中即采（默认，记录全量含 frames）
+	// 1=仅窗口首条采（被抑制条免采，记录无 frames）2=关闭
+	const int captureMode = m_config->stackCaptureMode();
+	std::string stack;
+	if (captureMode == 0)
+		stack = StackCapture::format(StackCapture::capture());
 	/*
 	 * 跨线程特征（PRD 06 §5）：senderThread（注册表发射时刻快照）vs recvThread。
 	 * 注意不能比 curThread == recvThread：两者都在 notify 线程内快照，恒相等，
@@ -106,36 +114,93 @@ void MetaCallWatcher::process(QObject *receiver, QEvent *event, std::int64_t ela
 	// curThread 仅作上下文字段保留（与 recvThread 对比无诊断意义）
 	const quintptr currentThreadId = reinterpret_cast<quintptr>(QThread::currentThreadId());
 
-	if (info.valid) {
+	// V3 A2：风暴抑制——窗口（1s）内同 key（sender+signal）首条必出 WARN，
+	// 静默条 DEBUG（RecordSink 全量采集，文件/控制台按用户级别去重）
+	if (m_suppressor == nullptr)
+		m_suppressor = std::make_unique<AlarmSuppressor>();
+	const std::string stormKey = senderClassName.toStdString()
+		+ '|' + std::to_string(info.signalId);
+	const int windowMs = m_config->alarmSuppressWindowMs();	// V4 B1：窗口热更新实时读
+	const AlarmDecision decision = m_suppressor->evaluate(stormKey, windowMs);
+	if (captureMode == 1 && decision.emitNow)
+		stack = StackCapture::format(StackCapture::capture());	// 仅窗口首条采（MetaCall 栈即槽执行栈）
+	if (decision.suppressedFlushed > 0) {
 		QEW_LOG_WARN(
-		    "[MetaCallWatcher] slow MetaCall "
-		    "sender={} signal={} signalId={} senderThread={:#x} "
-		    "receiver={} object={} recvThread={:#x} curThread={:#x} match={} "
-		    "costMs={:.3f} thresholdMs={}",
+		    "[MetaCallWatcher] alarm storm sender={} signalId={} "
+		    "suppressed={} windowMs={}",
 		    senderClassName.toStdString(),
-		    signalSignature.toStdString(),
 		    info.signalId,
-		    senderThreadId,
-		    info.receiverClassName.toStdString(),
-		    info.receiverObjectName.toStdString(),
-		    info.receiverThreadId,
-		    currentThreadId,
-		    threadMatch,
-		    elapsedMs,
-		    m_config->slowMetaCallThresholdMs());
+		    decision.suppressedFlushed,
+		    windowMs);
+	}
+
+	if (decision.emitNow) {
+		if (info.valid) {
+			QEW_LOG_WARN(
+			    "[MetaCallWatcher] slow MetaCall "
+			    "sender={} signal={} signalId={} senderThread={:#x} "
+			    "receiver={} object={} recvThread={:#x} curThread={:#x} match={} "
+			    "costMs={:.3f} thresholdMs={} stack={}",
+			    senderClassName.toStdString(),
+			    signalSignature.toStdString(),
+			    info.signalId,
+			    senderThreadId,
+			    info.receiverClassName.toStdString(),
+			    info.receiverObjectName.toStdString(),
+			    info.receiverThreadId,
+			    currentThreadId,
+			    threadMatch,
+			    elapsedMs,
+			    m_config->slowMetaCallThresholdMs(),
+			    stack);
+		} else {
+			// 解析降级：仅输出公开可得的 receiver 信息（PRD 06：解析失败安全跳过）
+			QEW_LOG_WARN(
+			    "[MetaCallWatcher] slow MetaCall "
+			    "receiver={} object={} recvThread={:#x} curThread={:#x} match={} "
+			    "costMs={:.3f} thresholdMs={} stack={}",
+			    info.receiverClassName.toStdString(),
+			    info.receiverObjectName.toStdString(),
+			    info.receiverThreadId,
+			    currentThreadId,
+			    threadMatch,
+			    elapsedMs,
+			    m_config->slowMetaCallThresholdMs(),
+			    stack);
+		}
 	} else {
-		// 解析降级：仅输出公开可得的 receiver 信息（PRD 06：解析失败安全跳过）
-		QEW_LOG_WARN(
-		    "[MetaCallWatcher] slow MetaCall "
-		    "receiver={} object={} recvThread={:#x} curThread={:#x} match={} "
-		    "costMs={:.3f} thresholdMs={}",
-		    info.receiverClassName.toStdString(),
-		    info.receiverObjectName.toStdString(),
-		    info.receiverThreadId,
-		    currentThreadId,
-		    threadMatch,
-		    elapsedMs,
-		    m_config->slowMetaCallThresholdMs());
+		if (info.valid) {
+			QEW_LOG_DEBUG(
+			    "[MetaCallWatcher] slow MetaCall "
+			    "sender={} signal={} signalId={} senderThread={:#x} "
+			    "receiver={} object={} recvThread={:#x} curThread={:#x} match={} "
+			    "costMs={:.3f} thresholdMs={} stack={}",
+			    senderClassName.toStdString(),
+			    signalSignature.toStdString(),
+			    info.signalId,
+			    senderThreadId,
+			    info.receiverClassName.toStdString(),
+			    info.receiverObjectName.toStdString(),
+			    info.receiverThreadId,
+			    currentThreadId,
+			    threadMatch,
+			    elapsedMs,
+			    m_config->slowMetaCallThresholdMs(),
+			    stack);
+		} else {
+			QEW_LOG_DEBUG(
+			    "[MetaCallWatcher] slow MetaCall "
+			    "receiver={} object={} recvThread={:#x} curThread={:#x} match={} "
+			    "costMs={:.3f} thresholdMs={} stack={}",
+			    info.receiverClassName.toStdString(),
+			    info.receiverObjectName.toStdString(),
+			    info.receiverThreadId,
+			    currentThreadId,
+			    threadMatch,
+			    elapsedMs,
+			    m_config->slowMetaCallThresholdMs(),
+			    stack);
+		}
 	}
 }
 

@@ -83,6 +83,8 @@ private:
     /// 诊断报告导出（PRD 17 §5）：文件对话框选路径 → ReportExporter，Ctrl+E
     void exportReport();
     void exportData();
+    /// HTML 报告导出（V3 C2）：自包含静态报告，Ctrl+Shift+H
+    void exportHtmlReport();
     /// 诊断摘要（V2 A3）：DiagnosticSummarizer.analyze → 显示在本页文本区
     void generateSummary();
     /// 500ms 轮询：KPI + 最近异常 + 明细表 + 空态切换

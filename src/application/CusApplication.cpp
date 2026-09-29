@@ -2,6 +2,7 @@
 
 #include "EventStatistics.h"
 #include "EventWatcher.h"
+#include "EventWatchdog.h"
 #include "WatchEventInfo.h"
 #include "MetaCallFilter.h"
 #include "MetaCallWatcher.h"
@@ -9,37 +10,63 @@
 #include "EventGuard.h"
 #include "WatchConfig.h"
 #include "IpcConfigServer.h"
+#include "UplinkClient.h"
 
 #include <QTimer>
 
-namespace qt_event_watcher 
+namespace qt_event_watcher
 {
 
 CusApplication::CusApplication(int &argc, char **argv)
 	: QApplication(argc, argv)
+	, m_config(std::make_unique<WatchConfig>())
 {
-	m_config.load();
-	m_eventStatistics = std::make_unique<EventStatistics>(&m_config);
-	m_eventWatcher = std::make_unique<EventWatcher>(&m_config, m_eventStatistics.get());
-	m_metaCallWatcher = std::make_unique<MetaCallWatcher>(&m_config);
-	QssStyleWatcher::instance()->setup(&m_config);
+	m_config->load();
+	m_eventStatistics = std::make_unique<EventStatistics>(m_config.get());
+	m_eventWatcher = std::make_unique<EventWatcher>(m_config.get(), m_eventStatistics.get());
+	m_metaCallWatcher = std::make_unique<MetaCallWatcher>(m_config.get());
+	QssStyleWatcher::instance()->setup(m_config.get());
 
 	// INI 热更新轮询（PRD 11 §5）：mtime 变化 → reloadIfChanged 原子替换；
 	// 轮询间隔本身可被热更新，reload 后按新间隔重启
 	m_configTimer = std::make_unique<QTimer>();
 	connect(m_configTimer.get(), &QTimer::timeout, this, [this]() {
-		if (m_config.reloadIfChanged())
-			m_configTimer->start(m_config.configPollIntervalMs());
+		if (m_config->reloadIfChanged())
+			m_configTimer->start(m_config->configPollIntervalMs());
+		// V4 D1：上行链路热更跟随（名字非空即启用，变空断开闲置；
+		// flush 周期由 UplinkClient 每拍实时读，无需此处干预）
+		const bool wantUplink = !m_config->uplinkName().isEmpty();
+		if (wantUplink && m_uplink == nullptr)
+			m_uplink = std::make_unique<UplinkClient>(m_config.get());
+		else if (!wantUplink && m_uplink != nullptr)
+			m_uplink.reset();
 	});
-	m_configTimer->start(m_config.configPollIntervalMs());
+	m_configTimer->start(m_config->configPollIntervalMs());
+
+	// 上行链路（V4 D1）：启动配置非空即启用（差异于 configTimer 首拍——
+	// 启用即起步，不等轮询周期）
+	if (!m_config->uplinkName().isEmpty())
+		m_uplink = std::make_unique<UplinkClient>(m_config.get());
 
 	// IPC 配置服务（V2 Phase B）：QLocalSocket + JSON 行协议，外部进程实时调控。
 	// 请求处理直接走 setter/filter（主线程事件循环），与热更新同构；启动失败仅
 	// WARN 不影响监控（PRD 14 哲学）
-	m_ipcServer = std::make_unique<IpcConfigServer>(&m_config, metaCallFilter());
+	m_ipcServer = std::make_unique<IpcConfigServer>(m_config.get(), metaCallFilter());
 	if (!m_ipcServer->start()) {
 		m_ipcServer.reset();	// 服务不可用时保持无 IPC 状态运行
 	}
+
+	// UI 冻结看门狗（V3 B 线）：常驻线程 + run() 内实时查 WatchFreeze 位
+	// （bit4 热更新即时生效）；心跳 QTimer 挂主线程，冻结即停跳（ANR 检测源）。
+	// 心跳周期热更新跟随（同 configTimer 重启模式）
+	m_watchdog = std::make_unique<EventWatchdog>(m_config.get());
+	m_watchdog->start();
+	m_heartbeatTimer = std::make_unique<QTimer>();
+	connect(m_heartbeatTimer.get(), &QTimer::timeout, this, [this]() {
+		m_watchdog->beat();
+		m_heartbeatTimer->start(m_config->heartbeatIntervalMs());
+	});
+	m_heartbeatTimer->start(m_config->heartbeatIntervalMs());
 }
 
 // unique_ptr 成员需要完整类型，析构必须在实现文件中定义
@@ -52,7 +79,9 @@ MetaCallFilter *CusApplication::metaCallFilter() const
 
 bool CusApplication::watchEnabled(int watchFunctionBit) const
 {
-	return m_config.isWatchEnabled(static_cast<WatchConfig::WatchFunction>(watchFunctionBit));
+	// 判空：基类构造/析构阶段 m_config 尚未创建/已销毁（同 notify 成员规则）
+	return m_config != nullptr &&
+	       m_config->isWatchEnabled(static_cast<WatchConfig::WatchFunction>(watchFunctionBit));
 }
 
 namespace
@@ -87,7 +116,16 @@ bool CusApplication::notify(QObject *receiver, QEvent *event)
 	}
 
 	EventGuard guard;
+	// V3 B 线：冻结取证快照——"正在处理的事件"（QApplication::notify 返回即清除）。
+	// 基类 QApplication 构造/析构阶段（平台插件初始化等）仍会派发事件进入本函数，
+	// 此时 m_watchdog 尚未创建或已销毁，必须判空
+	if (m_watchdog != nullptr) {
+		m_watchdog->eventStarted(receiver, event);
+	}
 	const bool result = QApplication::notify(receiver, event);
+	if (m_watchdog != nullptr) {
+		m_watchdog->eventFinished();
+	}
 	const std::int64_t elapsedNs = guard.elapsedNs();
 
 	// 本帧自身耗时 = Inclusive - 直接嵌套子事件 Inclusive 之和

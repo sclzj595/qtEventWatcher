@@ -1,6 +1,8 @@
 #include "EventWatcher.h"
 
+#include "AlarmSuppressor.h"
 #include "EventStatistics.h"
+#include "StackCapture.h"
 #include "WatchConfig.h"
 #include "WatchLogMacros.h"
 
@@ -16,6 +18,8 @@ EventWatcher::EventWatcher(WatchConfig *config, EventStatistics *statistics)
 {
 }
 
+EventWatcher::~EventWatcher() = default;
+
 bool EventWatcher::watch(WatchEventInfo &info, std::int64_t elapsedNs, std::int64_t exclusiveElapsedNs)
 {
 	if (m_config == nullptr)	return false;
@@ -27,21 +31,68 @@ bool EventWatcher::watch(WatchEventInfo &info, std::int64_t elapsedNs, std::int6
 		const std::int64_t thresholdNs = static_cast<std::int64_t>(m_config->slowEventThresholdMs()) * 1000000LL;
 		info.slow = info.elapsedNs >= thresholdNs;
 		if (info.slow) {
-			QEW_LOG_WARN(
-	            "[EventWatcher] slow event "
-	            "receiver={} object={} event={} type={} depth={} costMs={:.3f} exclusiveCostMs={:.3f} "
-	            "curThread={:#x} recvThread={:#x} match={} thresholdMs={}",
-	            info.receiverClassName.toStdString(),
-	            info.receiverObjectName.toStdString(),
-	            info.eventName.toStdString(),
-	            info.eventType,
-	            info.nestingDepth,
-	            info.elapsedMs(),
-	            info.exclusiveElapsedMs(),
-	            info.currentThreadId,
-	            info.receiverThreadId,
-	            info.receiverThreadMatch(),
-	            m_config->slowEventThresholdMs());
+			// V4 B2：栈采集时机——0=命中即采（默认，记录全量含 frames）
+			// 1=仅窗口首条采（被抑制条免采，记录无 frames）2=关闭
+			const int captureMode = m_config->stackCaptureMode();
+			std::string stack;
+			if (captureMode == 0)
+				stack = StackCapture::format(StackCapture::capture());
+
+			// V3 A2：风暴抑制——窗口（1s）首条必出 WARN，静默条 DEBUG
+			// （RecordSink 降至 debug 全量采集，文件/控制台 sink 按用户级别去重）
+			if (m_suppressor == nullptr)
+				m_suppressor = std::make_unique<AlarmSuppressor>();
+			const std::string stormKey = info.receiverClassName.toStdString()
+				+ '|' + std::to_string(info.eventType);
+			const int windowMs = m_config->alarmSuppressWindowMs();	// V4 B1：窗口热更新实时读
+			const AlarmDecision decision = m_suppressor->evaluate(stormKey, windowMs);
+			if (captureMode == 1 && decision.emitNow)
+				stack = StackCapture::format(StackCapture::capture());	// 仅窗口首条采
+			if (decision.suppressedFlushed > 0) {
+				QEW_LOG_WARN(
+		            "[EventWatcher] alarm storm receiver={} event={} type={} "
+		            "suppressed={} windowMs={}",
+		            info.receiverClassName.toStdString(),
+		            info.eventName.toStdString(),
+		            info.eventType,
+		            decision.suppressedFlushed,
+		            windowMs);
+			}
+			if (decision.emitNow) {
+				QEW_LOG_WARN(
+		            "[EventWatcher] slow event "
+		            "receiver={} object={} event={} type={} depth={} costMs={:.3f} exclusiveCostMs={:.3f} "
+		            "curThread={:#x} recvThread={:#x} match={} thresholdMs={} stack={}",
+		            info.receiverClassName.toStdString(),
+		            info.receiverObjectName.toStdString(),
+		            info.eventName.toStdString(),
+		            info.eventType,
+		            info.nestingDepth,
+		            info.elapsedMs(),
+		            info.exclusiveElapsedMs(),
+		            info.currentThreadId,
+		            info.receiverThreadId,
+		            info.receiverThreadMatch(),
+		            m_config->slowEventThresholdMs(),
+		            stack);
+			} else {
+				QEW_LOG_DEBUG(
+		            "[EventWatcher] slow event "
+		            "receiver={} object={} event={} type={} depth={} costMs={:.3f} exclusiveCostMs={:.3f} "
+		            "curThread={:#x} recvThread={:#x} match={} thresholdMs={} stack={}",
+		            info.receiverClassName.toStdString(),
+		            info.receiverObjectName.toStdString(),
+		            info.eventName.toStdString(),
+		            info.eventType,
+		            info.nestingDepth,
+		            info.elapsedMs(),
+		            info.exclusiveElapsedMs(),
+		            info.currentThreadId,
+		            info.receiverThreadId,
+		            info.receiverThreadMatch(),
+		            m_config->slowEventThresholdMs(),
+		            stack);
+			}
 		}
 	}
 

@@ -46,6 +46,8 @@ bool WatchLogger::initialize(const std::string& logDirectory,
 		// fs_path.h operator!= 推导 bug 会导致 MinGW81 构建失败）
 		if (!logDirectory.empty())	QDir().mkpath(QString::fromStdString(logDirectory));
 		auto consoleSink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+		// 控制台按用户级别过滤（V3 A2 前由 logger 门统一过滤，现下沉到 sink）
+		consoleSink->set_level(toSpdlogLevel(logLevel));
 		std::vector<spdlog::sink_ptr> sinks;
 		sinks.push_back(consoleSink);
 		// 告警内存捕获：供 UI/诊断工具实时读取（PRD 17 统计导出的最小前置）
@@ -56,12 +58,19 @@ bool WatchLogger::initialize(const std::string& logDirectory,
 		if (!logDirectory.empty()) {
 			const std::string logFile = logDirectory + "/QtEventWatcher.log";
 			auto fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(logFile, 5 * 1024 * 1024, 3);
+			// 文件按用户级别过滤（V3 A2：静默条为 DEBUG，文件保持用户级别即自动去重）
+			fileSink->set_level(toSpdlogLevel(logLevel));
 			sinks.push_back(fileSink);
 		}
 
 		auto logger = std::make_shared<spdlog::logger>(loggerName, sinks.begin(), sinks.end());
 
-		logger->set_level(toSpdlogLevel(logLevel));
+		// logger 门放宽至 debug（V3 A2 风暴抑制：静默条以 DEBUG 级发出，
+		// RecordSink 接住全量，文件/控制台 sink 按用户级别去重）；Off 保持全关
+		spdlog::level::level_enum gate = toSpdlogLevel(logLevel);
+		if (gate != spdlog::level::off && gate > spdlog::level::debug)
+			gate = spdlog::level::debug;
+		logger->set_level(gate);
 		// 慢事件/异常等 WARN 级别日志立即刷盘，避免进程异常退出时丢失
 		logger->flush_on(spdlog::level::warn);
 

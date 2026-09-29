@@ -29,6 +29,7 @@
 #include <QElapsedTimer>
 #include <QEvent>
 #include <QObject>
+#include <QThread>
 #include <QtGlobal>
 
 #include <algorithm>
@@ -182,6 +183,40 @@ int main(int argc, char *argv[])
 			BusyReceiver busyReceiver;
 			QEvent busyEvent(QEvent::User);
 			benchNotifyPair("busy-user-event-alert", app, &busyReceiver, busyEvent, 300, 3);
+
+			// ---- V3 D1：风暴抑制生效后的"首条告警"完整路径 ----
+			// 上面的 tight-loop 场景在 A2 抑制器生效后测得的是被抑制路径
+			// （首条落盘 + 后续静默累计）；本场景每条间隔 1.1s（>1s 抑制窗口），
+			// 逐条均为完整告警（格式化 + 文件 IO + flush），与绕过监控的基线
+			// 同间隔对照，差值即风暴中单条告警的真实落盘成本。
+			{
+				constexpr int kSpacedIters = 5;
+				BusyReceiver spacedReceiver;
+				QEvent spacedEvent(QEvent::User);
+				double baseSum = 0.0, monSum = 0.0, monMax = 0.0;
+				for (int i = 0; i < kSpacedIters; ++i) {
+					QThread::msleep(1100);	// > 1s 抑制窗口 → 本条必为完整告警
+					QElapsedTimer timer;
+					timer.start();
+					app.QCoreApplication::notify(&spacedReceiver, &spacedEvent);
+					baseSum += static_cast<double>(timer.nsecsElapsed());
+
+					QThread::msleep(1100);
+					timer.restart();
+					app.notify(&spacedReceiver, &spacedEvent);
+					const double ns = static_cast<double>(timer.nsecsElapsed());
+					monSum += ns;
+					monMax = std::max(monMax, ns);
+				}
+				const double baseAvg = baseSum / kSpacedIters;
+				const double monAvg = monSum / kSpacedIters;
+				std::fprintf(stdout,
+				             "scenario=busy-user-event-alert-first base_avg=%.1f "
+				             "mon_avg=%.1f mon_max=%.1f delta_avg=%.1f ns/op "
+				             "(iters=%d spaced=1.1s, full alarm path per op)\n",
+				             baseAvg, monAvg, monMax, monAvg - baseAvg, kSpacedIters);
+				std::fflush(stdout);
+			}
 		}
 	} else if (mode == "metacall_on" || mode == "metacall_off") {
 		// ---- 场景 4：直连信号发射（隔离 spy 回调增量，不经过事件队列）----

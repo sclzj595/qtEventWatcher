@@ -27,6 +27,7 @@ struct WatchLogCapture::Impl
 		if (text.rfind("[MetaCallWatcher]", 0) == 0)		return CatMetaCall;
 		if (text.rfind("[EventStatistics]", 0) == 0)		return CatEventStat;
 		if (text.rfind("[QssStyleWatcher]", 0) == 0)		return CatQss;
+		if (text.rfind("[FreezeWatch]", 0) == 0)			return CatFreeze;
 		return CatOther;
 	}
 };

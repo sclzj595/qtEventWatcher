@@ -8,5 +8,6 @@ set(QT_EVENT_WATCHER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ReportExporter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DataExporter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DiagnosticSummarizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/HtmlReporter.cpp
     PARENT_SCOPE
 )

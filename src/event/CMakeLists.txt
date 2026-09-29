@@ -8,5 +8,8 @@ set(QT_EVENT_WATCHER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/MetaCallParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ThreadRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/MetaCallWatcher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/StackCapture.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/AlarmSuppressor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EventWatchdog.cpp
     PARENT_SCOPE
 )

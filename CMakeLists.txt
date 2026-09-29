@@ -55,12 +55,46 @@ find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS
     Core
     Widgets
     Network
+    Sql
 )
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS
     Core
     Widgets
     Network
+    Sql
 )
+
+
+# ============================================================
+# Sql 运行件部署（V3 C1）
+# ============================================================
+
+# 背景：当 exe 同目录存在部署拷贝的 Qt5Core.dll 时（windeployqt 产物），
+# QLibraryInfo 插件路径随 Core DLL 位置重定位，而 windeployqt 默认不部署
+# sqldrivers 类目 -> QSQLITE 驱动不可用。将 QtSql 运行库与 qsqlite 插件
+# 拷贝到目标输出目录（exe 旁），app-dir 的 sqldrivers/ 子目录始终在
+# Qt 插件搜索路径内，无需 QT_PLUGIN_PATH 环境变量。
+# Qt5/Qt6 与 MSVC/MinGW 官方二进制布局一致：<prefix>/bin、<prefix>/plugins/sqldrivers。
+function(qew_deploy_sql_plugins target)
+    get_filename_component(_qt_prefix "${Qt${QT_VERSION_MAJOR}Sql_DIR}/../../.." ABSOLUTE)
+    set(_sql_dll "${_qt_prefix}/bin/Qt${QT_VERSION_MAJOR}Sql.dll")
+    set(_sqlite_plugin "${_qt_prefix}/plugins/sqldrivers/qsqlite.dll")
+    if (EXISTS "${_sql_dll}")
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_sql_dll}" "$<TARGET_FILE_DIR:${target}>"
+            COMMENT "Deploying Qt${QT_VERSION_MAJOR}Sql.dll"
+        )
+    endif ()
+    if (EXISTS "${_sqlite_plugin}")
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target}>/sqldrivers"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_sqlite_plugin}" "$<TARGET_FILE_DIR:${target}>/sqldrivers/"
+            COMMENT "Deploying qsqlite.dll plugin"
+        )
+    endif ()
+endfunction()
 
 
 # ============================================================
@@ -140,3 +174,21 @@ endif()
 if (CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install" CACHE PATH "Install prefix" FORCE)
 endif ()
+
+# find_package 分发模型（V4 C2）：Config + Version + Targets 三件套
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+    cmake/QtEventWatcherConfig.cmake.in
+    "${CMAKE_BINARY_DIR}/cmake/QtEventWatcherConfig.cmake"
+    INSTALL_DESTINATION lib/cmake/QtEventWatcher
+)
+write_basic_package_version_file(
+    "${CMAKE_BINARY_DIR}/cmake/QtEventWatcherConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+install(FILES
+    "${CMAKE_BINARY_DIR}/cmake/QtEventWatcherConfig.cmake"
+    "${CMAKE_BINARY_DIR}/cmake/QtEventWatcherConfigVersion.cmake"
+    DESTINATION lib/cmake/QtEventWatcher
+)

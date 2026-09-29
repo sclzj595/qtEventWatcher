@@ -11,6 +11,7 @@ namespace qt_event_watcher
 class WatchConfig;
 class MetaCallFilter;
 class MetaCallSenderRegistry;
+class AlarmSuppressor;
 
 /**
  * @brief	MetaCall Event 监控器（Bit1）
@@ -38,6 +39,7 @@ private:
 	WatchConfig* m_config = nullptr;
 	std::unique_ptr<MetaCallSenderRegistry> m_senderRegistry;
 	std::unique_ptr<MetaCallFilter> m_filter;
+	std::unique_ptr<AlarmSuppressor> m_suppressor;	///< V3 A2 告警风暴抑制（懒构造，仅告警路径访问）
 	bool m_spyHijackWarned = false;	///< 抢占告警仅输出一次
 };
 
