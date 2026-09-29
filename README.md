@@ -5,6 +5,13 @@
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20MSVC%20%7C%20MinGW-lightgrey.svg)](docs/02_需求范围与版本矩阵.md)
 [![standard](https://img.shields.io/badge/C%2B%2B-17-00599c.svg)](CMakeLists.txt)
 
+> 仓库描述（复制到 Gitee/GitHub 仓库设置 → 基本信息 → 仓库描述，推荐 Topics：`qt` `cpp` `performance` `profiler` `anr` `desktop`）：
+
+```text
+Qt Widgets 桌面程序的轻量级 ANR 看门狗与事件级性能剖析组件：拦截 notify() 计时全部事件，慢事件/慢信号/冻结告警 + 函数级调用栈归因，自身开销 ~140ns/事件。
+```
+
+
 面向 Qt Widgets 桌面程序的轻量级 ANR 看门狗与事件级性能剖析组件：拦截 `QApplication::notify()` 计时全部事件，识别慢事件 / 慢 MetaCall（跨线程信号）/ QSS 加载抖动 / 主线程冻结（ANR），周期统计聚合，慢事件自动采集调用栈到函数级，日志落盘、报告导出、外部进程实时调控。
 
 > **自身开销已量化到 ns 级**：全关常驻 ≈140ns/事件（帧预算的 0.0008%），开启监控后 <1µs/事件，告警路径仅超阈值事件付费——监控器自身不成为卡顿来源。完整四矩阵（Qt 5.15/6.5 × MSVC/MinGW）基准数据见 [docs/22_性能基准报告.md](docs/22_性能基准报告.md)。
