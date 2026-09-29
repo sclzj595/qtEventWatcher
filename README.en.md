@@ -17,6 +17,17 @@ A lightweight ANR watchdog and event-level performance profiling component for Q
 
 > **Overhead quantified down to nanoseconds**: ≈140 ns/event when fully disabled (0.0008% of a 60 FPS frame budget), <1 µs/event when monitoring is enabled, and the alarm path is paid only by events that already exceed the threshold — the watchdog itself never becomes the source of jank. Full four-matrix (Qt 5.15/6.5 × MSVC/MinGW) benchmark data in [docs/22_性能基准报告.md](docs/22_性能基准报告.md) (Chinese).
 
+<p align="center">
+  <img src="docs/img/basic-demo-overview.png" alt="Basic Demo overview: slow event / MetaCall / high-frequency stat cards with a live anomaly feed" width="700"><br>
+  <em>examples/basic 7-page diagnostic UI — overview page (stat cards + live anomaly feed)</em>
+</p>
+
+<p align="center">
+  <img src="docs/img/aggregation-report.png" alt="Multi-process aggregation HTML report: overview / per-pid health / TOP receivers / freeze timeline / details" width="700"><br>
+  <em>Self-contained aggregation report from <code>aggregator</code> (zero JS) — multi-process, grouped by host_pid</em>
+</p>
+
+
 ## Core Features
 
 - **Global event monitoring**: `notify()` override times every event; slow event / slow MetaCall / QSS jank alarms by category; configurable thresholds with INI / IPC hot-reload at runtime
@@ -94,6 +105,19 @@ Precedence: defaults → env vars → INI → runtime setters. All environment v
 
 ## Build & Test
 
+**CMake presets (recommended)** — the Qt path is injected via an environment variable, no file edits needed:
+
+```powershell
+$env:QT_EVENT_WATCHER_QT_DIR = "<Qt>/5.15.2/msvc2019_64"   # or 6.5.3, any Qt prefix
+cmake --preset windows-msvc          # also: windows-msvc2022 / windows-mingw / linux-gcc
+cmake --build --preset windows-msvc --config Release
+ctest --preset windows-msvc -C Release
+```
+
+MinGW additionally needs `QT_EVENT_WATCHER_MINGW_BIN` pointing at the toolchain bin dir. Requires CMake ≥ 3.21.
+
+**Classic way**:
+
 ```powershell
 cmake -S . -B build -G "Visual Studio 16 2019" -A x64   # or -G Ninja + a MinGW toolchain
 cmake --build build --config Release
@@ -104,7 +128,7 @@ One-shot regression (build + smoke + benchmark drift detection, four matrices): 
 
 ## Documentation
 
-The complete PRD collection (01~29: architecture / protocols / performance / release engineering, all in Chinese) lives in [docs/](docs/). Key entries:
+The complete PRD collection (01~29: architecture / protocols / performance / release engineering, all in Chinese) lives in [docs/README.md](docs/README.md) (index). Key entries:
 
 - Integration & adaptation: [docs/23_集成与适配说明.md](docs/23_集成与适配说明.md) (spdlog / Qt version compatibility / MetaCall ABI)
 - Overhead evidence: [docs/22_性能基准报告.md](docs/22_性能基准报告.md)

@@ -18,6 +18,17 @@ Qt Widgets 桌面程序的轻量级 ANR 看门狗与事件级性能剖析组件�
 
 > **自身开销已量化到 ns 级**：全关常驻 ≈140ns/事件（帧预算的 0.0008%），开启监控后 <1µs/事件，告警路径仅超阈值事件付费——监控器自身不成为卡顿来源。完整四矩阵（Qt 5.15/6.5 × MSVC/MinGW）基准数据见 [docs/22_性能基准报告.md](docs/22_性能基准报告.md)。
 
+<p align="center">
+  <img src="docs/img/basic-demo-overview.png" alt="Basic Demo 概览页：慢事件/MetaCall/高频事件统计卡片与最近异常实时流" width="700"><br>
+  <em>examples/basic 七页诊断 UI —— 概览页（统计卡片 + 最近异常实时流）</em>
+</p>
+
+<p align="center">
+  <img src="docs/img/aggregation-report.png" alt="多进程聚合 HTML 报告：概览/进程健康度/TOP 接收者/冻结时间线/明细" width="700"><br>
+  <em>aggregator 自包含聚合报告（零 JS）—— 多进程按 host_pid 分组</em>
+</p>
+
+
 ## 核心能力
 
 - **全局事件监控**：`notify()` 覆写计时全部事件，慢事件/慢 MetaCall/QSS 抖动分类告警，阈值可配、INI/IPC 运行时热更新
@@ -95,6 +106,19 @@ EventStatPeriodMs=1000
 
 ## 构建与测试
 
+**CMake Presets（推荐）**——Qt 路径经环境变量注入，无需改任何文件：
+
+```powershell
+$env:QT_EVENT_WATCHER_QT_DIR = "<Qt>/5.15.2/msvc2019_64"   # 或 6.5.3 等任一 Qt 前缀
+cmake --preset windows-msvc          # 另有 windows-msvc2022 / windows-mingw / linux-gcc
+cmake --build --preset windows-msvc --config Release
+ctest --preset windows-msvc -C Release
+```
+
+MinGW 需另设 `QT_EVENT_WATCHER_MINGW_BIN` 指向工具链 bin 目录。需 CMake ≥ 3.21。
+
+**传统方式**：
+
 ```powershell
 cmake -S . -B build -G "Visual Studio 16 2019" -A x64   # 或 -G Ninja + MinGW 工具链
 cmake --build build --config Release
@@ -110,7 +134,7 @@ ctest -C Release                                        # 冒烟测试（在 bui
 - 事件模型：[docs/05_全局事件耗时监控.md](docs/05_全局事件耗时监控.md)、[docs/06_MetaCall跨线程信号监控.md](docs/06_MetaCall跨线程信号监控.md)
 - 配置参考：[docs/13_配置项与阈值.md](docs/13_配置项与阈值.md)
 
-完整 PRD 全集（01~29，含架构/协议/性能/版本规划/交付总结）见 [docs/](docs/)。
+完整 PRD 全集（01~29，含架构/协议/性能/版本规划/交付总结）见 [docs/README.md](docs/README.md) 索引。
 
 ## Roadmap
 

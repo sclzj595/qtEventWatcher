@@ -1,0 +1,56 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "_comment": "消费者一键配置。Qt 安装路径经环境变量注入，不硬编码：QT_EVENT_WATCHER_QT_DIR=<Qt 安装前缀，如 <Qt>/5.15.2/msvc2019_64 或 <Qt>/6.5.3/msvc2019_64>；MinGW 额外设 QT_EVENT_WATCHER_MINGW_BIN=<MinGW 工具链 bin 目录>。构建/测试：cmake --build --preset <name> --config Release && ctest --preset <name> -C Release（多配置生成器）。",
+  "configurePresets": [
+    {
+      "name": "windows-msvc",
+      "displayName": "Windows MSVC x64 / VS2019",
+      "generator": "Visual Studio 16 2019",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/out/${presetName}",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{QT_EVENT_WATCHER_QT_DIR}"
+      }
+    },
+    {
+      "name": "windows-msvc2022",
+      "displayName": "Windows MSVC x64 / VS2022",
+      "inherits": "windows-msvc",
+      "generator": "Visual Studio 17 2022"
+    },
+    {
+      "name": "windows-mingw",
+      "displayName": "Windows MinGW (Ninja)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/${presetName}",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{QT_EVENT_WATCHER_QT_DIR}",
+        "CMAKE_C_COMPILER": "$env{QT_EVENT_WATCHER_MINGW_BIN}/gcc.exe",
+        "CMAKE_CXX_COMPILER": "$env{QT_EVENT_WATCHER_MINGW_BIN}/g++.exe",
+        "CMAKE_MAKE_PROGRAM": "$env{QT_EVENT_WATCHER_MINGW_BIN}/mingw32-make.exe"
+      }
+    },
+    {
+      "name": "linux-gcc",
+      "displayName": "Linux GCC",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/out/${presetName}",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{QT_EVENT_WATCHER_QT_DIR}"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-msvc", "configurePreset": "windows-msvc", "configuration": "Release" },
+    { "name": "windows-msvc2022", "configurePreset": "windows-msvc2022", "configuration": "Release" },
+    { "name": "windows-mingw", "configurePreset": "windows-mingw" },
+    { "name": "linux-gcc", "configurePreset": "linux-gcc" }
+  ],
+  "testPresets": [
+    { "name": "windows-msvc", "configurePreset": "windows-msvc", "configuration": "Release" },
+    { "name": "windows-msvc2022", "configurePreset": "windows-msvc2022", "configuration": "Release" },
+    { "name": "windows-mingw", "configurePreset": "windows-mingw" },
+    { "name": "linux-gcc", "configurePreset": "linux-gcc" }
+  ]
+}
