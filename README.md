@@ -19,8 +19,8 @@ Qt Widgets 桌面程序的轻量级 ANR 看门狗与事件级性能剖析组件�
 > **自身开销已量化到 ns 级**：全关常驻 ≈140ns/事件（帧预算的 0.0008%），开启监控后 <1µs/事件，告警路径仅超阈值事件付费——监控器自身不成为卡顿来源。完整四矩阵（Qt 5.15/6.5 × MSVC/MinGW）基准数据见 [docs/22_性能基准报告.md](docs/22_性能基准报告.md)。
 
 <p align="center">
-  <img src="docs/img/basic-demo-overview.png" alt="Basic Demo 概览页：慢事件/MetaCall/高频事件统计卡片与最近异常实时流" width="700"><br>
-  <em>examples/basic 七页诊断 UI —— 概览页（统计卡片 + 最近异常实时流）</em>
+  <img src="docs/img/basic-demo.gif" alt="Basic Demo 动态演示：慢事件/MetaCall/高频事件统计卡片与最近异常实时流" width="700"><br>
+  <em>examples/basic 七页诊断 UI —— 概览页实时演示（动图）</em>
 </p>
 
 <p align="center">

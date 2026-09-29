@@ -18,8 +18,8 @@ A lightweight ANR watchdog and event-level performance profiling component for Q
 > **Overhead quantified down to nanoseconds**: ≈140 ns/event when fully disabled (0.0008% of a 60 FPS frame budget), <1 µs/event when monitoring is enabled, and the alarm path is paid only by events that already exceed the threshold — the watchdog itself never becomes the source of jank. Full four-matrix (Qt 5.15/6.5 × MSVC/MinGW) benchmark data in [docs/22_性能基准报告.md](docs/22_性能基准报告.md) (Chinese).
 
 <p align="center">
-  <img src="docs/img/basic-demo-overview.png" alt="Basic Demo overview: slow event / MetaCall / high-frequency stat cards with a live anomaly feed" width="700"><br>
-  <em>examples/basic 7-page diagnostic UI — overview page (stat cards + live anomaly feed)</em>
+  <img src="docs/img/basic-demo.gif" alt="Basic Demo live demo: slow event / MetaCall / high-frequency stat cards with a live anomaly feed" width="700"><br>
+  <em>examples/basic 7-page diagnostic UI — overview page, live (animated)</em>
 </p>
 
 <p align="center">
