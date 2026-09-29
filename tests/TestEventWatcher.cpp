@@ -18,19 +18,24 @@
 #include "WatchLogger.h"
 #include "WatchLogMacros.h"
 #include "WatchRecordStore.h"
+#include "UplinkClient.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLocalServer>
 #include <QLocalSocket>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QThread>
 #include <QTimer>
+#include <functional>
 #include <memory>
 
 #include <iostream>
@@ -926,6 +931,159 @@ int main(int argc, char* argv[])
             ++failures;
         } else {
             std::cout << "  freeze gate: disabled -> silent OK" << std::endl;
+        }
+    }
+
+    // ---- 上行链路 + 健康度（V4 D1 / V5 B / V6 Q4）：内嵌 QLocalServer 模拟对端 ----
+    // 替代 V4/V5 手工 e2e：进程内直读 pushed/dropped/reconnects 公有访问器，
+    // 行为级断言 record.push 线协议、断线重连计数、health 载荷自洽
+    {
+        const QString uplinkName = QStringLiteral("QEW_Test_Uplink_%1_%2")
+                                       .arg(QCoreApplication::applicationPid())
+                                       .arg(QDateTime::currentMSecsSinceEpoch());
+        QLocalServer server;
+        const bool listening = server.listen(uplinkName);
+
+        WatchConfig upConfig;
+        upConfig.setUplinkName(listening ? uplinkName : QString());
+        upConfig.setUplinkFlushMs(50);		// 快拍：压缩连接/重连等待
+
+        // 探针记录 2 条（RecordSink 无条件采集，kind=Slow 前缀匹配语义）
+        for (int i = 0; i < 2; ++i) {
+            QEW_LOG_WARN("[EventWatcher] slow event receiver=UplinkProbe object=u event=Timer "
+                         "type=1 depth=0 costMs=60.000 exclusiveCostMs=60.000 curThread=0x1 "
+                         "recvThread=0x1 match=true thresholdMs=30 stack=TestApp.exe!0x3");
+        }
+
+        UplinkClient client(&upConfig);
+
+        // 线上状态：NDJSON 行缓冲累积（跨断连重建共用同一缓冲）
+        QByteArray buffer;
+        int newConnectionCount = 0;
+        QLocalSocket* lastSock = nullptr;
+        qint64 receivedRecords = 0;
+        int probeSeen = 0;
+        int healthCount = 0;
+        qint64 lastSeqSeen = 0;
+        bool seqOk = true;
+        bool shapeOk = true;
+        QJsonObject healthPayload;
+
+        auto processLines = [&]() {
+            int nl = -1;
+            while ((nl = buffer.indexOf('\n')) >= 0) {
+                const QByteArray line = buffer.left(nl);
+                buffer.remove(0, nl + 1);
+                const QJsonDocument doc = QJsonDocument::fromJson(line);
+                if (!doc.isObject())	continue;
+                const QJsonObject obj = doc.object();
+                const QString op = obj.value(QStringLiteral("op")).toString();
+                if (op == QStringLiteral("record.push")) {
+                    const QJsonArray records =
+                        obj.value(QStringLiteral("records")).toArray();
+                    receivedRecords += records.size();
+                    for (const QJsonValue& v : records) {
+                        const QJsonObject r = v.toObject();
+                        // V5 A2 raw 化协议：线上仅 kind/seq/time/raw 四字段
+                        shapeOk = shapeOk && r.contains(QStringLiteral("kind"))
+                            && r.contains(QStringLiteral("seq"))
+                            && r.contains(QStringLiteral("time"))
+                            && r.contains(QStringLiteral("raw"));
+                        const qint64 seq =
+                            r.value(QStringLiteral("seq")).toVariant().toLongLong();
+                        if (seq < lastSeqSeen)	seqOk = false;
+                        lastSeqSeen = qMax(lastSeqSeen, seq);
+                        if (r.value(QStringLiteral("raw")).toString()
+                                .contains(QStringLiteral("receiver=UplinkProbe")))
+                            ++probeSeen;
+                    }
+                } else if (op == QStringLiteral("health")) {
+                    healthPayload = obj;
+                    ++healthCount;
+                }
+            }
+        };
+        QObject::connect(&server, &QLocalServer::newConnection, [&]() {
+            while (QLocalSocket* sock = server.nextPendingConnection()) {
+                ++newConnectionCount;
+                lastSock = sock;
+                // sock 按值捕获：lambda 存活期超过 while 迭代，按引用即悬垂
+                QObject::connect(sock, &QLocalSocket::readyRead, [&, sock]() {
+                    buffer += sock->readAll();
+                    processLines();
+                });
+            }
+        });
+
+        auto waitUntil = [](const std::function<bool()>& cond, int timeoutMs) {
+            QElapsedTimer clock;
+            clock.start();
+            while (!cond() && clock.elapsed() < timeoutMs) {
+                QEventLoop loop;
+                QTimer::singleShot(20, &loop, &QEventLoop::quit);
+                loop.exec();
+            }
+            return cond();
+        };
+
+        // A1 记录推送：探针 2 条 + 存量记录全量首推；客户计数与线上一致
+        const bool pushOk = listening
+            && waitUntil([&]() {
+                   return receivedRecords >= 2
+                       && receivedRecords == static_cast<qint64>(client.pushedCount());
+               }, 3000)
+            && receivedRecords >= 2 && shapeOk && seqOk && probeSeen == 2;
+        if (!pushOk) {
+            std::cout << "  [UPLINK PUSH FAIL] listening=" << listening
+                      << " received=" << receivedRecords
+                      << " pushed=" << client.pushedCount()
+                      << " probe=" << probeSeen << " shape=" << shapeOk
+                      << " seq=" << seqOk << std::endl;
+            ++failures;
+        } else {
+            std::cout << "  uplink record.push: received=" << receivedRecords
+                      << " == pushed, shape/seq OK" << std::endl;
+        }
+
+        // A2 断线重连：对端关闭连接（本拍无数据可写，客户端侧无写错误可观察，
+        // 恰为 V5 B 修复的"对端进程被杀"路径）→ 退避重连 reconnects >= 1
+        if (lastSock != nullptr)
+            lastSock->close();
+        const bool reconnectOk = waitUntil([&]() {
+            return client.reconnectCount() >= 1 && newConnectionCount >= 2;
+        }, 3000);
+        if (!reconnectOk) {
+            std::cout << "  [UPLINK RECONNECT FAIL] reconnects="
+                      << client.reconnectCount()
+                      << " connections=" << newConnectionCount << std::endl;
+            ++failures;
+        } else {
+            std::cout << "  uplink reconnect: connections=" << newConnectionCount
+                      << " reconnects=" << client.reconnectCount() << " OK" << std::endl;
+        }
+
+        // A3 健康度：5s 节拍（构造起算，已连接才发）；载荷与计数器自洽——
+        // V5 B 遗留验收缺口（计数器无外部上报通道）由此关闭
+        const bool healthOk = waitUntil([&]() { return healthCount >= 1; }, 9000)
+            && healthPayload.value(QStringLiteral("pid")).toVariant().toLongLong()
+                   == QCoreApplication::applicationPid()
+            && healthPayload.value(QStringLiteral("pushed")).toVariant().toLongLong()
+                   == static_cast<qint64>(client.pushedCount())
+            && healthPayload.value(QStringLiteral("dropped")).toVariant().toLongLong()
+                   == static_cast<qint64>(client.droppedCount())
+            && healthPayload.value(QStringLiteral("reconnects")).toVariant().toLongLong()
+                   == static_cast<qint64>(client.reconnectCount())
+            && healthPayload.value(QStringLiteral("lastSeq")).toVariant().toLongLong() > 0;
+        if (!healthOk) {
+            std::cout << "  [UPLINK HEALTH FAIL] count=" << healthCount
+                      << " payload=" << QJsonDocument(healthPayload)
+                             .toJson(QJsonDocument::Compact).toStdString()
+                      << " pushed=" << client.pushedCount()
+                      << " dropped=" << client.droppedCount()
+                      << " reconnects=" << client.reconnectCount() << std::endl;
+            ++failures;
+        } else {
+            std::cout << "  uplink health: payload self-consistent OK" << std::endl;
         }
     }
 
