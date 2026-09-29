@@ -1,5 +1,7 @@
 # QtEventWatcher — Qt 卡顿排查辅助器
 
+<p align="right"><b>中文</b> | <a href="README.en.md">English</a></p>
+
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Qt](https://img.shields.io/badge/Qt-5.15%20%7C%206.5-41cd52.svg)](https://www.qt.io/)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20MSVC%20%7C%20MinGW-lightgrey.svg)](docs/02_需求范围与版本矩阵.md)
