@@ -45,6 +45,23 @@ jobs:
         run: |
           pip install aqtinstall
           aqt install-qt windows desktop ${{ matrix.qtVersion }} ${{ matrix.qtArch }} --outputdir D:\Qt
+          # Qt 6.5.x + 新版 MSVC STL（VS2022 17.13+）兼容补丁：
+          # qcompilerdetection.h 将 QT_MAKE_CHECKED/UNCHECKED_ARRAY_ITERATOR
+          # 定义为 stdext::make_checked/unchecked_array_iterator，而 stdext 已被
+          # 新 STL 移除（CI Run 3 实证 QtCore/qvarlengtharray.h C2065 'stdext'；
+          # QTBUG-111580 同源，Qt 官方 6.6+ 已加版本守卫）。checked iterator
+          # 仅是调试安全包装，直通替换语义零差异。仅触及安装树，不动仓库。
+          if ('${{ matrix.qtVersion }}' -like '6.*') {
+            $qcd = "D:\Qt\${{ matrix.qtVersion }}\msvc2019_64\include\QtCore\qcompilerdetection.h"
+            if (Test-Path $qcd) {
+              $enc = New-Object System.Text.UTF8Encoding($false)
+              $c = [IO.File]::ReadAllText($qcd, $enc)
+              $c = $c.Replace('stdext::make_unchecked_array_iterator(x)', '(x)')
+              $c = $c.Replace('stdext::make_checked_array_iterator(x, size_t(N))', '(x)')
+              [IO.File]::WriteAllText($qcd, $c, $enc)
+              Write-Host "patched qcompilerdetection.h for Qt ${{ matrix.qtVersion }}"
+            }
+          }
           # MinGW 矩阵启用时在此追加：
           # aqt install-tool windows desktop ${{ matrix.toolVariant }} ${{ matrix.toolPackage }} --outputdir D:\Qt
 
