@@ -140,8 +140,8 @@ The complete PRD collection (01~29: architecture / protocols / performance / rel
 
 ## Roadmap
 
-- [ ] **V6 quality proof line**: unit tests for pure logic + static-analysis gates + ASan validation ([docs/31](docs/31_V6实施计划.md), Chinese)
-- [ ] **Scout out-of-process probe (product line B)**: freeze & hotspot detection for *any* desktop app (Electron/WPF/Win32) from outside, precise renderer jank for Electron via CDP, aggregated into the same reports
+- [x] **V6 quality line**: pure-logic unit tests + static analysis gates + ASan evidence ([docs/31](docs/31_V6实施计划.md))
+- [ ] **Scout out-of-process probe (product line B)**: jank detection for *any* desktop app (Electron/WPF/Win32) from outside, aggregated into the same reports — **S1 delivered**: T1 window-freeze + T1b CPU heuristic ([examples/scout](examples/scout/), [docs/32](docs/32_V7-Scout实施计划.md)); S2 planned: precise renderer long-task jank for Electron via CDP
 - [ ] Linux support (portability already reserved in code; validation pending a real environment)
 - [ ] QML / Qt Quick event-path coverage (currently Widgets-focused)
 - [ ] Flame-graph export (stack data already captured; renderer missing)

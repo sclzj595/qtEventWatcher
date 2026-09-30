@@ -3,6 +3,21 @@
 本文件记录 QtEventWatcher 的版本演进。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号对应仓库迭代里程碑（详细规划与逐 Phase 实施记录见 [docs/21_版本规划与交付物.md](docs/21_版本规划与交付物.md)）。
 
+## [v6.0.0] - 2026-09-30
+
+### 新增
+- **Scout 外部探针 S1**（产品线 B / V7，examples/scout）：进程外检测任意 Windows 桌面程序（Electron/WPF/Win32/Qt）卡顿——T1 窗口冻结（SendMessageTimeout 消息泵停摆，三态告警对齐 EventWatchdog，aggregator/HTML 零改动渲染）+ T1b CPU 启发（目标+子进程单核满转，episode 迟滞防抖），观测记录复用自监控日志行协议全链路上行
+- `basic_demo --spin <ms>`：主线程 busy-loop 验证靶（Scout T1/T1b 双喂）
+- **单元测试基建**（V6 Q1）：tests/unit/QEWT 轻量断言 + 25 用例 96 检查（解析族/抑制器合成时钟/kindOf 行为级/环形账目闭合/WatchConfig），回归脚本纳入 unit 步骤（四矩阵 16/16）
+- **集成测试补强**（V6 Q4）：TestEventWatcher 新增 uplink/health 行为级断言（内嵌 QLocalServer：record.push 线协议/断线重连计数/health 载荷自洽）
+- `scripts/static-check.ps1`：cppcheck 一键门禁（V6 Q2）
+- 双语 README 质量徽章（tests/cppcheck/ASan）
+
+### 变更
+- **静态分析清零**（V6 Q2）：/W3→/W4 + -Wall -Wextra 四矩阵 0 警告；cppcheck（--library=qt + -DQT_VERSION + --error-exitcode）0 findings；修复 4 处 performance（成员入初始化列表/serverName() 返回 const 引用）
+- **ASan 实证**（V6 Q3）：build-asan /MT 静态 runtime（Win11 24H2 动态 runtime 0xC0000142 环境降级），UnitTests/集成冒烟/Benchmark 全路径零报告；MSVC 无 LSan 照实声明（泄漏留待 Linux）
+- CusApplication 配置改 unique_ptr<WatchConfig>（V4 C2 收尾）
+
 ## [v5.1.0] - 2026-09-29
 
 ### 新增

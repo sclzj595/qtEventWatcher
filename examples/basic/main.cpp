@@ -7,6 +7,7 @@
 #include "WatchLogMacros.h"
 #include "WatchLogger.h"
 
+#include <QElapsedTimer>
 #include <QFile>
 #include <QTimer>
 #include <QThread>
@@ -26,13 +27,18 @@ int main(int argc, char* argv[])
     // --stress <count>：1.5s 后以 50ms 节拍合成慢事件告警（每拍 64 条 DEBUG 级，
     // 文件/控制台 sink 用户级过滤不刷屏，RecordSink debug 全量采集 → 环形缓冲
     // → UplinkClient 上行；V4 D 线断点续推/背压丢弃验收的风暴源），发完自动退出
+    // --spin <ms>：1.5s 后主线程 busy-loop 指定时长（CPU 单核满转 + 消息泵停摆，
+    // 同帧喂 T1 冻结与 T1b CPU 启发——Scout 外部探针的验证靶，V7 S1）
     int autoFreezeMs = 0;
     int stressCount = 0;
+    int spinMs = 0;
     for (int i = 1; i < argc; ++i) {
         if (QByteArray(argv[i]) == "--autofreeze" && i + 1 < argc)
             autoFreezeMs = QByteArray(argv[i + 1]).toInt();
         else if (QByteArray(argv[i]) == "--stress" && i + 1 < argc)
             stressCount = QByteArray(argv[i + 1]).toInt();
+        else if (QByteArray(argv[i]) == "--spin" && i + 1 < argc)
+            spinMs = QByteArray(argv[i + 1]).toInt();
     }
 
     // 主题跟随系统（PRD 19 §9）；外部 QSS 文件每次启动按当前令牌重建，
@@ -67,6 +73,19 @@ int main(int argc, char* argv[])
     if (autoFreezeMs > 0) {
         QTimer::singleShot(1500, &app, [autoFreezeMs]() {
             QThread::msleep(autoFreezeMs);	// 心跳停跳 → FreezeWatch 三态告警
+        });
+    }
+
+    if (spinMs > 0) {
+        QTimer::singleShot(1500, &app, [spinMs]() {
+            // 主线程 busy-loop：CPU 单核满转且消息泵停摆（Scout T1/T1b 双验证靶）
+            QElapsedTimer clock;
+            clock.start();
+            volatile double sink = 0.0;	// 防空转被优化掉
+            while (clock.elapsed() < spinMs) {
+                for (int i = 0; i < 20000; ++i)
+                    sink += i * 0.5;
+            }
         });
     }
 
