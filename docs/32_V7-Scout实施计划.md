@@ -77,3 +77,59 @@ scout 探针 ──QEW_LOG_WARN──▶ WatchLogger ──▶ RecordSink（前�
   PerformanceObserver('longtask') → 周期拉取 buffer → costMs=long task 时长
 - 验证靶：`msedge --remote-debugging-port=9222`（同为 Chromium，无需 Electron 环境）
 - aggregator HTML 外部进程专属章节（receiver 按 host_pid 分组已有基础）、--title 窗口过滤
+
+## 7. S2 交付记录（2026-09-30）
+
+**T2 CDP 长任务探针已交付**：examples/scout/ 新增 CdpLongTaskProber（.h/.cpp），
+scout 新增 `--cdp-port` / `--cdp-target` / `--cdp-threshold` 三参数，支持
+**纯 CDP 模式**（免 pid/name，CDP 端口即目标标识）。Qt WebSockets 为可选依赖
+（CMake QUIET 探测，缺失时禁用探针不阻断构建，main.cpp 经 `QEWT_SCOUT_CDP` 条件接线）。
+
+### 7.1 T2 前置验证（真 Electron 靶）
+
+npm(npmmirror) 安装 Electron 152 为可控靶（CDP 9224），node22 内置 WebSocket
+零依赖探针四轮迭代，踩实四个语义边界：
+
+1. **Runtime.evaluate 内忙转不产生 longtask 条目**——debugger 通道任务不算页面
+   任务；探针只消费页面真实任务，反而零自身噪声
+2. **data: URL 页面 inline script 不执行**（Electron 152）——测试靶必须 file://
+3. **页面 hidden 时 observer 投递停滞**——条目延迟不丢失；联调靶设
+   backgroundThrottling:false 规避
+4. **已运行 Electron 全局单例吞 --remote-debugging-port**——目标必须带参冷启动
+
+msedge（Edg/154）旁证先行 PASS——Chromium 系全覆盖。
+
+### 7.2 S2 实现（CdpLongTaskProber）
+
+- 发现：QNetworkAccessManager GET `/json/list` → 选 type=page target
+  （`--cdp-target` 按 url/title 子串过滤，空取首个）；不可达 2s 静默重试
+  （仅首次告警）
+- 注入：QWebSocket 连 webSocketDebuggerUrl → Runtime.evaluate 安装
+  PerformanceObserver(longtask, **buffered:true**——注入即回放历史条目）
+- 回读：500ms 周期 `JSON.stringify(__qewt_lt.splice(0))` 增量清窗；命中
+  `need-inject` 哨兵（页面导航重置 window）自动重注入
+- 断连：disconnected 信号统一驱动重发现（errorOccurred 为 Qt6.5+ 专属信号，
+  跨版本不可用——Qt5.15 编译期实证）
+- 行格式：复用 `[EventWatcher] slow event` 前缀（KindSlowEvent，HTML/聚合/
+  导出零改动），`event=cdpLongTask type=98 source=scout-cdp url=<page url>`
+
+### 7.3 E2E 实测证据（electron-lab 靶，每 2s 忙转 120ms）
+
+- **检测精度**：costMs=120/121 与靶忙转时长精确吻合（29 条 min=120 max=121）
+- **断连重发现**：kill@10s → `page disconnected, rediscovering in 2000ms` →
+  重启后自动重连+重注入（间隔 4.5s）→ 记录恢复，两端行为级实证
+- **上行账目**：aggregator `received=29 == pushed=29 == lastSeq=29, dropped=0`，
+  seq 零缺口，non-cdp=0，health 自洽——**零改动闭环 S2 版成立**
+- **buffered 红利**：注入首拍即回放历史长任务（19 条突发），页面启动即有上下文
+
+### 7.4 质量门禁
+
+- 四矩阵构建全绿（Qt WebSockets 四矩阵 Qt 官方二进制均自带）
+- 回归 16/16 + static-check 0 findings（见实施当轮记录）
+
+### 7.5 已知边界
+
+- 探针侧无风暴抑制：持续高频长任务页面逐条发行，依赖 RecordSink 环形 4096
+  吸收；可放宽 `--cdp-threshold` 降噪
+- hidden 页面条目延迟投递（Chromium 节流语义，非探针缺陷）
+- CDP 需目标配合（带参冷启动）；无 CDP 的任意程序回落 S1 的 T1/T1b

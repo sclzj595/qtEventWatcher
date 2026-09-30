@@ -149,7 +149,7 @@ ctest -C Release                                        # 冒烟测试（在 bui
 ## Roadmap
 
 - [x] **V6 质量证明线**：纯逻辑单元测试 + 静态分析门禁 + ASan 实证（[docs/31](docs/31_V6实施计划.md)）
-- [ ] **Scout 外部探针（产品线 B）**：进程外检测任意桌面程序（Electron/WPF/Win32）的卡顿，统一汇入 aggregator 报告——**S1 已交付**：T1 窗口冻结 + T1b CPU 启发（[examples/scout](examples/scout/)，[docs/32](docs/32_V7-Scout实施计划.md)）；S2 规划中：Electron 经 CDP 拿 renderer 精确长任务卡顿
+- [ ] **Scout 外部探针（产品线 B）**：进程外检测任意桌面程序（Electron/WPF/Win32）的卡顿，统一汇入 aggregator 报告——**S1 已交付**：T1 窗口冻结 + T1b CPU 启发（[examples/scout](examples/scout/)，[docs/32](docs/32_V7-Scout实施计划.md)）；**S2 已交付**：T2 CDP 长任务——`scout --cdp-port 9222` 直连 Electron/Chromium 页面，PerformanceObserver 精确到渲染长任务（目标带 `--remote-debugging-port` 冷启动）
 - [ ] Linux 验证（可移植性已在代码层预留，等环境）
 - [ ] QML/Qt Quick 事件路径支持（当前面向 Widgets）
 - [ ] 火焰图导出（调用栈数据已具备，缺渲染端）

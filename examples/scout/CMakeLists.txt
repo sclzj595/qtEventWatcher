@@ -1,6 +1,7 @@
 # ============================================================
-# scout - 跨栈程序卡顿外部探针（V7 S1 / 产品线 B，console）
+# scout - 跨栈程序卡顿外部探针（V7 / 产品线 B，console）
 # T1 窗口冻结 + T1b CPU 启发，进程外检测任意 Windows 桌面程序；
+# T2 CDP 长任务（可选，Qt WebSockets 依赖）；
 # 观测记录复用自监控日志行协议 → UplinkClient → aggregator
 # ============================================================
 
@@ -30,3 +31,18 @@ target_link_libraries(scout
     PRIVATE
         QtEventWatcherCore
 )
+
+# S2：CDP 长任务探针——可选依赖 Qt WebSockets（Qt5/Qt6 官方二进制均自带）。
+# 缺失时禁用该探针并提示，不阻断构建（main.cpp 经 QEWT_SCOUT_CDP 条件接线）。
+find_package(Qt${QT_VERSION_MAJOR} COMPONENTS WebSockets QUIET)
+if (TARGET Qt${QT_VERSION_MAJOR}::WebSockets)
+    target_sources(scout PRIVATE
+        CdpLongTaskProber.cpp
+        CdpLongTaskProber.h
+    )
+    target_compile_definitions(scout PRIVATE QEWT_SCOUT_CDP=1)
+    target_link_libraries(scout PRIVATE Qt${QT_VERSION_MAJOR}::WebSockets)
+else()
+    message(STATUS "scout: Qt${QT_VERSION_MAJOR}::WebSockets not found, "
+                   "CDP long-task prober disabled")
+endif()

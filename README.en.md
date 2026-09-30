@@ -150,7 +150,7 @@ The complete PRD collection (01~29: architecture / protocols / performance / rel
 ## Roadmap
 
 - [x] **V6 quality line**: pure-logic unit tests + static analysis gates + ASan evidence ([docs/31](docs/31_V6实施计划.md))
-- [ ] **Scout out-of-process probe (product line B)**: jank detection for *any* desktop app (Electron/WPF/Win32) from outside, aggregated into the same reports — **S1 delivered**: T1 window-freeze + T1b CPU heuristic ([examples/scout](examples/scout/), [docs/32](docs/32_V7-Scout实施计划.md)); S2 planned: precise renderer long-task jank for Electron via CDP
+- [ ] **Scout out-of-process probe (product line B)**: jank detection for *any* desktop app (Electron/WPF/Win32) from outside, aggregated into the same reports — **S1 delivered**: T1 window-freeze + T1b CPU heuristic ([examples/scout](examples/scout/), [docs/32](docs/32_V7-Scout实施计划.md)); **S2 delivered**: T2 CDP long-task probe — `scout --cdp-port 9222` attaches to Electron/Chromium pages for precise renderer long-task detection (target must cold-start with `--remote-debugging-port`)
 - [ ] Linux support (portability already reserved in code; validation pending a real environment)
 - [ ] QML / Qt Quick event-path coverage (currently Widgets-focused)
 - [ ] Flame-graph export (stack data already captured; renderer missing)

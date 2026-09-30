@@ -3,6 +3,17 @@
 本文件记录 QtEventWatcher 的版本演进。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号对应仓库迭代里程碑（详细规划与逐 Phase 实施记录见 [docs/21_版本规划与交付物.md](docs/21_版本规划与交付物.md)）。
 
+## [v6.1.0] - 2026-09-30
+
+### 新增
+- **Scout 外部探针 S2**（V7 T2，examples/scout/CdpLongTaskProber）：CDP 长任务探针——`scout --cdp-port 9222` 直连 Electron/Edge/Chrome 页面（QNetworkAccessManager 发现 + QWebSocket + PerformanceObserver(longtask) 注入/回读），渲染长任务精确到毫秒；支持纯 CDP 模式（免 pid/name）、断连自动重发现、页面导航自动重注入、buffered 回放历史条目；行格式复用 slow event 前缀，aggregator/HTML/导出零改动渲染
+- scout CLI：`--cdp-port` / `--cdp-target <substr>` / `--cdp-threshold ms`；Qt WebSockets 为可选依赖（缺失时禁用探针不阻断构建）
+- **CI 首次打通**（GitHub Actions regression）：双 Qt 矩阵 windows-latest 常绿；Build 取证装置（失败时 error 行写入 step summary + ::error:: 注解 + build.log artifact）
+- 双语 README 挂 CI 徽章 + VS2022 (17.13+) / Qt 6.5.x stdext 兼容性说明（QTBUG-111580 下游指引）
+
+### 修复
+- CI qt653-msvc 编译失败：Qt 6.5.x `qcompilerdetection.h` 引用新版 MSVC STL 已移除的 `stdext`（qvarlengtharray.h C2065）——workflow Install Qt 步对 aqt 安装树打直通补丁（checked iterator 纯调试安全包装，语义零差异；宏预定义方案因 Qt 头 MSVC 分支 C4005 重定义无效，已证伪）
+
 ## [v6.0.0] - 2026-09-30
 
 ### 新增

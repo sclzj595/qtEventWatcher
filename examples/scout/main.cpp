@@ -1,14 +1,18 @@
-// scout - 跨栈程序卡顿外部探针（产品线 B / V7 S1）
-// 进程外检测任意 Windows 桌面程序（Qt/Electron/WPF/Win32）的卡顿：
+// scout - 跨栈程序卡顿外部探针（产品线 B / V7）
+// 进程外检测任意桌面程序的卡顿：
 //   T1  窗口冻结——SendMessageTimeout 轮询消息泵停摆（未响应），三态告警
 //       行对齐 EventWatchdog 冻结语义，aggregator/HTML 冻结时间线零改动渲染
 //   T1b CPU 启发——目标进程+子进程单核满转检测（Electron renderer 即子进程）
+//   T2  CDP 长任务——Chromium 系（Electron/Edge/Chrome）页面渲染长任务精确
+//       检测（目标须以 --remote-debugging-port=<port> 冷启动）
 // 观测记录走与自监控完全相同的日志行协议：
 //   WatchLogger → RecordSink → WatchRecordStore → UplinkClient → aggregator
 // 用法：
 //   scout --pid <pid> | --name <proc.exe> [--threshold ms] [--interval ms]
 //         [--cpu-threshold pct] [--cpu-runs n] [--uplink <server>]
 //         [--flush-ms ms] [--duration ms]
+//   scout --cdp-port <port> [--cdp-target <substr>] [--cdp-threshold ms]
+//         [--uplink <server>] [--duration ms]     # T2 纯 CDP 模式（免 pid/name）
 
 #include "CpuSampler.h"
 #include "UplinkClient.h"
@@ -16,6 +20,9 @@
 #include "WatchLogger.h"
 #include "WatchLogMacros.h"
 #include "WindowFreezeProber.h"
+#ifdef QEWT_SCOUT_CDP
+#include "CdpLongTaskProber.h"
+#endif
 
 #include <QCoreApplication>
 #include <QThread>
@@ -30,14 +37,18 @@ namespace {
 void printUsage()
 {
 	std::printf(
-		"scout - cross-stack jank probe (QtEventWatcher V7 S1)\n"
+		"scout - cross-stack jank probe (QtEventWatcher V7)\n"
 		"usage: scout (--pid <pid> | --name <proc.exe>)\n"
 		"          [--threshold ms=2000] [--interval ms=250]\n"
 		"          [--cpu-threshold pct=95] [--cpu-runs n=3]\n"
 		"          [--uplink <server>] [--flush-ms ms=200] [--duration ms=0(stay)]\n"
+		"       scout --cdp-port <port> [--cdp-target <substr>] [--cdp-threshold ms=50]\n"
+		"          [--uplink <server>] [--duration ms]\n"
 		"examples:\n"
 		"  scout --name basic_demo.exe --threshold 2000 --duration 15000\n"
-		"  scout --pid 12345 --uplink QtEventWatcherAggregator\n");
+		"  scout --pid 12345 --uplink QtEventWatcherAggregator\n"
+		"  scout --cdp-port 9222 --uplink QtEventWatcherAggregator   # Electron/Chromium\n"
+		"            (target must be started with --remote-debugging-port=9222)\n");
 }
 
 } // namespace
@@ -57,6 +68,9 @@ int main(int argc, char *argv[])
 	QString uplink;
 	int flushMs = 200;
 	qint64 durationMs = 0;
+	int cdpPort = 0;				// 0 = CDP 探针关闭
+	int cdpThresholdMs = 50;
+	QString cdpTarget;				// url/title 子串过滤（空 = 首个 page）
 
 	for (int i = 1; i < argc; ++i) {
 		const QByteArray arg(argv[i]);
@@ -76,6 +90,12 @@ int main(int argc, char *argv[])
 			cpuThresholdPct = next().toInt();	++i; consumed = true;
 		} else if (arg == "--cpu-runs" && !next().isEmpty()) {
 			cpuRuns = next().toInt();			++i; consumed = true;
+		} else if (arg == "--cdp-port" && !next().isEmpty()) {
+			cdpPort = next().toInt();			++i; consumed = true;
+		} else if (arg == "--cdp-threshold" && !next().isEmpty()) {
+			cdpThresholdMs = next().toInt();	++i; consumed = true;
+		} else if (arg == "--cdp-target" && !next().isEmpty()) {
+			cdpTarget = QString::fromLocal8Bit(next()); ++i; consumed = true;
 		} else if (arg == "--uplink" && !next().isEmpty()) {
 			uplink = QString::fromLocal8Bit(next()); ++i; consumed = true;
 		} else if (arg == "--flush-ms" && !next().isEmpty()) {
@@ -90,11 +110,13 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (pid <= 0 && name.isEmpty()) {
+	// T2 纯 CDP 模式：免 pid/name——CDP 端口即目标标识
+	if (pid <= 0 && name.isEmpty() && cdpPort <= 0) {
 		printUsage();
 		return 2;
 	}
-	if (thresholdMs <= 0 || intervalMs <= 0 || cpuThresholdPct <= 0) {
+	if ((pid > 0 || !name.isEmpty())
+		&& (thresholdMs <= 0 || intervalMs <= 0 || cpuThresholdPct <= 0)) {
 		std::printf("invalid threshold/interval/cpu-threshold\n");
 		return 2;
 	}
@@ -115,29 +137,55 @@ int main(int argc, char *argv[])
 		uplink.isEmpty() ? nullptr : std::make_unique<UplinkClient>(&config);
 
 	// T1：窗口冻结探针（常驻 worker 线程；hung 拍最坏占满 threshold）
-	WindowFreezeProber freezeProber(name, pid, thresholdMs, intervalMs);
-	freezeProber.start(QThread::LowPriority);
+	// 仅 pid/name 目标模式启用——纯 CDP 模式由 T2 覆盖
+	const bool hasTarget = (pid > 0 || !name.isEmpty());
+	std::unique_ptr<WindowFreezeProber> freezeProber;
+	std::unique_ptr<CpuSampler> cpuSampler;
+	if (hasTarget) {
+		freezeProber = std::make_unique<WindowFreezeProber>(
+			name, pid, thresholdMs, intervalMs);
+		freezeProber->start(QThread::LowPriority);
+		cpuSampler = std::make_unique<CpuSampler>(
+			name, pid, cpuThresholdPct, cpuRuns, intervalMs);
+		cpuSampler->start();
+	}
 
-	// T1b：CPU 启发探针（主线程轻量采样）
-	CpuSampler cpuSampler(name, pid, cpuThresholdPct, cpuRuns, intervalMs);
-	cpuSampler.start();
+#ifdef QEWT_SCOUT_CDP
+	// T2：CDP 长任务探针（cdpPort>0 启用；纯异步，主线程事件循环驱动）
+	std::unique_ptr<CdpLongTaskProber> cdpProber;
+	if (cdpPort > 0) {
+		cdpProber = std::make_unique<CdpLongTaskProber>(
+			cdpPort, cdpTarget, cdpThresholdMs);
+		cdpProber->start();
+	}
+#else
+	if (cdpPort > 0)
+		std::printf("warning: built without Qt WebSockets, --cdp-port ignored\n");
+#endif
 
 	const std::string targetDesc = name.isEmpty()
 		? QStringLiteral("pid:%1").arg(pid).toStdString()
 		: name.toStdString();
 	QEW_LOG_INFO("[Scout] watching target={:s} pid={} thresholdMs={} intervalMs={} "
-				 "cpuThresholdPct={} cpuRuns={} uplink={:s}",
+				 "cpuThresholdPct={} cpuRuns={} cdpPort={} uplink={:s}",
 				 targetDesc, pid, thresholdMs, intervalMs, cpuThresholdPct, cpuRuns,
-				 uplink.toStdString());
+				 cdpPort, uplink.toStdString());
 
 	// duration > 0：到点自动退出（e2e/巡检模式）；0 = 常驻
 	if (durationMs > 0)
 		QTimer::singleShot(durationMs, &app, &QCoreApplication::quit);
 
 	QObject::connect(&app, &QCoreApplication::aboutToQuit, [&]() {
-		cpuSampler.stop();
-		freezeProber.stop();
-		freezeProber.wait(2000);
+#ifdef QEWT_SCOUT_CDP
+		if (cdpProber)
+			cdpProber->stop();
+#endif
+		if (cpuSampler)
+			cpuSampler->stop();
+		if (freezeProber) {
+			freezeProber->stop();
+			freezeProber->wait(2000);
+		}
 	});
 
 	return app.exec();
