@@ -13,6 +13,22 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# ============================================================
+# MSVC + Qt 6.5.x：stdext::checked_array_iterator 兼容垫片
+# ============================================================
+# Qt 6.5.x 的 qcompilerdetection.h 把 QT_MAKE_CHECKED_ARRAY_ITERATOR 定义为
+# stdext::make_checked_array_iterator，而新版 MSVC STL（VS2022 17.13+）已移除
+# stdext（CI windows-latest 实证：QtCore/qvarlengtharray.h C2065 'stdext'）。
+# 预定义为直通宏，走 qcompilerdetection.h 末尾的 #ifndef 兜底分支（Qt 官方
+# 预留的干净入口）；checked iterator 仅是调试安全包装，语义零差异。
+# Qt5.15 的使用点同样兼容（宏仍经同一入口定义），MinGW 不进入 MSVC 分支。
+if (MSVC)
+    add_compile_definitions(
+        "QT_MAKE_CHECKED_ARRAY_ITERATOR(x,N)=(x)"
+        "QT_MAKE_UNCHECKED_ARRAY_ITERATOR(x)=(x)"
+    )
+endif ()
+
 
 # ============================================================
 # Build Type (VS multi-config: only Release)
