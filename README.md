@@ -2,6 +2,7 @@
 
 <p align="right"><b>中文</b> | <a href="README.en.md">English</a></p>
 
+[![CI](https://github.com/sclzj595/qtEventWatcher/actions/workflows/regression.yml/badge.svg)](https://github.com/sclzj595/qtEventWatcher/actions/workflows/regression.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Qt](https://img.shields.io/badge/Qt-5.15%20%7C%206.5-41cd52.svg)](https://www.qt.io/)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20MSVC%20%7C%20MinGW-lightgrey.svg)](docs/02_需求范围与版本矩阵.md)
@@ -119,6 +120,12 @@ ctest --preset windows-msvc -C Release
 ```
 
 MinGW 需另设 `QT_EVENT_WATCHER_MINGW_BIN` 指向工具链 bin 目录。需 CMake ≥ 3.21。
+
+> **VS2022 (17.13+) + Qt 6.5.x 编译注意**：新版 MSVC STL 已移除 `stdext`，而 Qt 6.5.x 的
+> `qcompilerdetection.h` 仍引用它（QTBUG-111580，Qt 6.6+ 已修复），会在 `qvarlengtharray.h`
+> 报 `C2065: 'stdext'`。解法任选：升级 Qt ≥ 6.6；或参照
+> [regression.yml 的 Install Qt 步](.github/workflows/regression.yml)对 Qt 安装树打两行直通补丁
+> （checked iterator 纯调试安全包装，语义零差异）。本仓库 CI 即按此补丁在 windows-latest 上常绿。
 
 **传统方式**：
 

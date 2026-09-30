@@ -2,6 +2,7 @@
 
 <p align="right"><a href="README.md">中文</a> | <b>English</b></p>
 
+[![CI](https://github.com/sclzj595/qtEventWatcher/actions/workflows/regression.yml/badge.svg)](https://github.com/sclzj595/qtEventWatcher/actions/workflows/regression.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Qt](https://img.shields.io/badge/Qt-5.15%20%7C%206.5-41cd52.svg)](https://www.qt.io/)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20MSVC%20%7C%20MinGW-lightgrey.svg)](docs/02_需求范围与版本矩阵.md)
@@ -118,6 +119,14 @@ ctest --preset windows-msvc -C Release
 ```
 
 MinGW additionally needs `QT_EVENT_WATCHER_MINGW_BIN` pointing at the toolchain bin dir. Requires CMake ≥ 3.21.
+
+> **VS2022 (17.13+) + Qt 6.5.x build note**: recent MSVC STL removed `stdext`, which
+> Qt 6.5.x's `qcompilerdetection.h` still references (QTBUG-111580, fixed in Qt ≥ 6.6),
+> causing `C2065: 'stdext'` in `qvarlengtharray.h`. Either upgrade to Qt ≥ 6.6, or apply
+> the two-line passthrough patch to the Qt install tree as done in the
+> [Install Qt step of regression.yml](.github/workflows/regression.yml) (checked array
+> iterators are a debug-safety wrapper only — zero semantic difference). This repo's CI
+> stays green on windows-latest with that patch.
 
 **Classic way**:
 
