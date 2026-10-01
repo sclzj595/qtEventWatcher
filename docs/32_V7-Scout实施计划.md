@@ -133,3 +133,53 @@ msedge（Edg/154）旁证先行 PASS——Chromium 系全覆盖。
   吸收；可放宽 `--cdp-threshold` 降噪
 - hidden 页面条目延迟投递（Chromium 节流语义，非探针缺陷）
 - CDP 需目标配合（带参冷启动）；无 CDP 的任意程序回落 S1 的 T1/T1b
+
+## 8. Tauri 支持实证（2026-10-01，v6.2.0）
+
+用户诉求：卡顿检测不能只覆盖 Electron，**Tauri 也要能用**。架构差异与验证结论：
+
+### 8.1 Tauri 架构与探针覆盖面
+
+Tauri = Rust 主进程（tao 事件循环）+ **系统 WebView2**（不打包 Chromium），
+进程树为 `app.exe → msedgewebview2.exe（浏览器进程）→ renderer/GPU（孙进程）`：
+
+| 探针 | Tauri 覆盖 | 机制 |
+|---|---|---|
+| T1 窗口冻结 | ✅ 直接适用 | tao 主线程即 Win32 消息泵，阻塞即"未响应" |
+| T1b CPU 启发 | ✅ **需孙进程枚举**（本轮修复） | renderer 忙转在孙进程；`childPids`（一层）→ `descendantPids`（BFS 3 层） |
+| T2 CDP 长任务 | ✅ **WebView2 原生支持** | WebView2 全兼容 CDP；调试端口经环境变量注入（见下） |
+
+**CDP 端口注入**（Tauri 无命令行透传，WebView2 专用机制）：
+
+```powershell
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9224"
+.\app.exe
+```
+
+页面 target URL 形如 `http://tauri.localhost/`（tauri 2.12.1 / wry 0.57 / WebView2 154 实测）。
+
+### 8.2 验证靶与 E2E 实测
+
+验证靶 `%TEMP%\qewt-tauri-lab`（tauri 2 最小工程，rsproxy 镜像构建）：
+页面 JS 每 2s 忙转 120ms（长任务流）；t=4s 主线程忙转 2.5s（冻结窗）；
+t=6.9s 双 worker 线程忙转 5s（CPU 窗）——确定性时间线。
+
+`scout --name qewt-tauri-lab.exe --threshold 2000 --cpu-threshold 95 --cdp-port 9224 --uplink ...` 一体三探针：
+
+- **T2**：`page connected url=http://tauri.localhost/` → longtask 行
+  `costMs=120` × 11 条精确吻合
+- **T1**：`freeze started stalledMs=2000` + `recovered totalMs=363`
+  （scout 语义：started 行 stalledMs=SendMessageTimeout 阈值即下界；
+  recovered 行 totalMs=确认恢复差值，真冻结 2.5s）
+- **T1b**：`cpuSpin costMs=98.8`（主线程忙转段）。两段忙转间隙仅 0.5s
+  （`run_on_main_thread` 异步派发，双 burst 间隔=2 迟滞拍 < 4 拍收口线）
+  → **同一 busy episode 合并为单条告警**，产品语义正确
+- **上行**：aggregator `received=14 == pushed=14 == lastSeq=14, dropped=0`
+  （Slow=12 + Freeze=2），Tauri 记录与自监控/Qt 程序走完全相同链路
+
+### 8.3 本轮代码变更
+
+- `TargetResolver::childPids` → **`descendantPids`**（BFS 3 层后代枚举，
+  单快照建图 + 去重防 pid 环）——修 T1b 对 Tauri 漏采孙进程 renderer 的真缺口；
+  Electron（直接子进程）语义不变
+- 四矩阵 scout 构建全绿 + static-check 0 findings

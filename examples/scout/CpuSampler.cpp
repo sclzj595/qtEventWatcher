@@ -47,7 +47,7 @@ void CpuSampler::sample()
 		m_lastTotal100ns.clear();
 		return;
 	}
-	pids.append(TargetResolver::childPids(pids));
+	pids.append(TargetResolver::descendantPids(pids));	// 3 层后代（Tauri/WebView2 renderer 是孙进程）
 
 	const qint64 elapsedMs = m_sampleClock.elapsed();
 	m_sampleClock.restart();

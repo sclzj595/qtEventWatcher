@@ -1,11 +1,13 @@
 #pragma once
 
 /// TargetResolver - Scout S1 进程解析工具（header-only，Windows 专属）
-/// --name/--pid → 目标 pid 集 + 直接子进程枚举（Electron renderer 即子进程），
+/// --name/--pid → 目标 pid 集 + 后代进程枚举（Electron renderer 是直接子进程，
+/// Tauri/WebView2 renderer 是孙进程，BFS 3 层全收），
 /// 供 WindowFreezeProber（T1）与 CpuSampler（T1b）共用。
 
 #include <QString>
 #include <QList>
+#include <QHash>
 
 #ifdef Q_OS_WIN
 
@@ -53,26 +55,48 @@ inline QList<qint64> resolvePids(const QString &name, qint64 pid)
 	return pids;
 }
 
-/// 直接子进程枚举（一轮快照；Electron renderer/GPU 即目标之子）
-inline QList<qint64> childPids(const QList<qint64> &parents)
+/// 后代进程枚举：单轮快照建 parent→children 映射 + BFS 逐层展开（默认 3 层）。
+/// Tauri/WebView2 场景的渲染进程是目标的孙进程
+/// （app.exe → msedgewebview2.exe 浏览器进程 → renderer/GPU 孙进程），
+/// 直接子进程枚举会漏采 busy 的 renderer；3 层覆盖 app→宿主→渲染→内嵌子级。
+inline QList<qint64> descendantPids(const QList<qint64> &roots, int maxDepth = 3)
 {
-	QList<qint64> children;
-	if (parents.isEmpty())
-		return children;
+	QList<qint64> result;
+	if (roots.isEmpty() || maxDepth <= 0)
+		return result;
 
 	const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 	if (snap == INVALID_HANDLE_VALUE)
-		return children;
+		return result;
+
+	QHash<qint64, QList<qint64>> byParent;
 	PROCESSENTRY32W pe = {};
 	pe.dwSize = sizeof(pe);
 	if (Process32FirstW(snap, &pe)) {
 		do {
-			if (parents.contains(qint64(pe.th32ParentProcessID)))
-				children.append(qint64(pe.th32ProcessID));
+			byParent[qint64(pe.th32ParentProcessID)].append(qint64(pe.th32ProcessID));
 		} while (Process32NextW(snap, &pe));
 	}
 	CloseHandle(snap);
-	return children;
+
+	QList<qint64> frontier = roots;
+	for (int depth = 0; depth < maxDepth && !frontier.isEmpty(); ++depth) {
+		QList<qint64> next;
+		for (qint64 pid : frontier) {
+			const auto it = byParent.constFind(pid);
+			if (it == byParent.constEnd())
+				continue;
+			for (qint64 child : it.value()) {
+				// 根与已收结果去重（防 pid 环；进程数量级小，线性查足够）
+				if (!roots.contains(child) && !result.contains(child)) {
+					result.append(child);
+					next.append(child);
+				}
+			}
+		}
+		frontier = next;
+	}
+	return result;
 }
 
 /// pid → 进程名（找不到返回空串；用于 receiver 字段取名）
