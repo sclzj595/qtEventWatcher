@@ -3,7 +3,7 @@
 本文件记录 QtEventWatcher 的版本演进。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号对应仓库迭代里程碑（详细规划与逐 Phase 实施记录见 [docs/21_版本规划与交付物.md](docs/21_版本规划与交付物.md)）。
 
-## [Unreleased]
+## [v6.2.0] - 2026-10-01
 
 ### 新增
 - **Tauri 支持实证**（V7，docs/32 §8）：三探针对 Tauri（Rust 主进程 + 系统 WebView2）全通过——T1 窗口冻结直接适用（tao 主线程即消息泵）；T2 CDP 长任务经 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 环境变量注入调试端口（`http://tauri.localhost/` 页面 target 实测 11 条 costMs=120 精确）；E2E 上行 `received=14 dropped=0` 零改动汇入 aggregator
