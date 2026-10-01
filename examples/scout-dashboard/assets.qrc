@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/dashboard">
+        <file>dashboard.js</file>
+        <file>style.css</file>
+    </qresource>
+</RCC>

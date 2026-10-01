@@ -183,3 +183,77 @@ t=6.9s 双 worker 线程忙转 5s（CPU 窗）——确定性时间线。
   单快照建图 + 去重防 pid 环）——修 T1b 对 Tauri 漏采孙进程 renderer 的真缺口；
   Electron（直接子进程）语义不变
 - 四矩阵 scout 构建全绿 + static-check 0 findings
+
+## 9. S3 交付记录：独立可视化仪表盘（2026-10-02）
+
+`examples/scout-dashboard/`（console 工具，冷路径）：读 aggregator `--out` JSON
+快照 → 单文件自包含 HTML 仪表盘。纯文件消费方：不链 QtEventWatcherCore，
+仅 Qt Core 公共 API（QJsonDocument/QJsonArray/QTime 在 Qt5.15/6.5 零适配）。
+
+### 9.1 分层与交付物
+
+- **数据层** `DashboardModel.{h,cpp}`：loadModel（JSON → 模型）、classifyRecord
+  （kind 枚举 + scout 事件细分，type/event/source 三信号冗余判定）、freeze
+  started→recovered/lost 配对、relMs 跨午夜防御（t0 = **首条可解析记录**口径，
+  非 min(msecs)——min 口径跨午夜被次日小值击穿）、fields 全空 → Other 兜底
+  （损坏记录不落业务泳道）、filterModel（kinds 白名单 + pid 过滤，freezeSpans
+  仅当 kinds 含 3 保留）、escapeHtml / embedJsonSafe
+- **渲染层** `DashboardHtml.{h,cpp}`：exportDashboard 五章节静态 HTML（会话概览
+  与健康度 / 冻结时间轴 / CDP 长任务 per-url 汇总+CSS 条形直方 / CPU 与慢事件
+  / 明细折叠）+ 双形态共存：QEWT_DASHBOARD_EMBED 定义时追加 buildEmbedJson
+  （`<script type="application/json" id="dashboard-data">`）+ buildInteractiveShell
+  （style.css/dashboard.js 经 AUTORCC 内嵌）；资源缺失 stderr 警告降级纯静态
+- **交互层** `dashboard.js`（~300 行 vanilla IIFE）/ `style.css`：泳道时间轴
+  （freeze span 状态条：recovered 实心蓝 / lost 灰 / ongoing 橙条纹）、wheel
+  光标中心缩放 0.2x–50x、拖拽平移、双击复位、类型筛选（含 clsOff[0] 联动清空
+  时间轴）、pid 会话筛选、明细分页 100 条/页、悬停 tip——零依赖零构建链
+- **CLI** `main.cpp`：`--in`（必填）`--out`（默认 in 去后缀 .html）`--title`
+  `--pid` `--kind <csv 0..3>`；stdout 摘要与渲染/内嵌 JSON 三处共用 filterModel
+  同一口径
+
+### 9.2 安全设计（XSS 三层分工 + script 注入铁律）
+
+- C++ 静态位：escapeHtml（& \< \> " 四字符，对齐既有口径）
+- JSON 内嵌位：embedJsonSafe（Compact 序列化后 `</` → `<\/`，封死
+  `</script>` 提前闭合；`\/` 为 JSON 合法转义，fromJson 回读语义不变）
+- JS DOM 位：esc()
+- **HTML script 块注入铁律**：进入 `<script>` 的任何内容（含 JS 注释）禁止出现
+  字面 `</script` 序列——HTML parser 不管 JS 语义（本轮实测：dashboard.js 头
+  注释含字面闭合标签导致脚本块被提前截断，剩余 JS 源码成 DOM 文本）
+
+### 9.3 E2E 实测证据（混合会话，qt5152-msvc）
+
+采集链：aggregator（--name TestAggE2E --duration 50 落盘）← 双会话上行：
+basic_demo（WATCH_FUN=31 + --autofreeze 3000，自监控）+ scout（--name
+qewt-tauri-lab.exe --cdp-port 9226 --uplink TestAggE2E --duration 25000，
+外部探针；tauri-lab 经 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 开 CDP）。
+
+- CLI 摘要：`sessions=2 records=197 freeze_spans=1 cdp=14 cpu=1`
+- 自监控会话（pid 42288）：182 条（kind0×175 + kind1×1 + kind2×3 + kind3×3），
+  health 快照齐全，freeze 配对 1 span（--autofreeze 3000）
+- scout 会话（pid 56584）：15 条 kind0 = cdpLongTask×14（costMs=120 精确，
+  url=http://tauri.localhost/）+ cpuSpin×1（costMs=187.5 = CPU% 口径）
+- 概览表「外部探针/自监控」双徽章各 1 次互不串；内嵌 JSON 复核：scout 源记录
+  全部归属 pid 56584，basic_demo 会话零 scout 源
+- file:// 断网可用：grep 确认零外部资源引用（无 script src/link/img/url(http)）
+- CDP 自动化手测 8 项（headless Edge + Runtime.evaluate）：渲染 lanes/span、
+  悬停 tip、光标中心缩放、拖拽、双击复位、类型筛选联动、pid 筛选、分页态
+
+### 9.4 质量门禁
+
+- ScoutDashboardTests（qewt::Case 自建框架，8 用例 89 checks）：四矩阵全绿
+  （数据层直编入测试 target，避免 LNK2019）
+- 四矩阵 scout-dashboard 构建 + E2E JSON 复放出图摘要一致（qt5.15.2/6.5.3 ×
+  MSVC/MinGW）
+- static-check 0 findings（cppcheck 2.22.0）
+- 四矩阵回归（scripts/run_regression.ps1 快速档）PASS
+
+### 9.5 已知边界与实现注记
+
+- CMake `if (EXISTS assets.qrc)` 在 configure 期评估——新建 qrc 后旧 build 目录
+  必须 `cmake -S -B` 重新配置才感知（实测 vcxproj 无 EMBED 宏即此因）
+- cpuSpin 行槽位复用 slow event 行格式：costMs 实填 CPU 占用百分比、thresholdMs
+  实填阈值百分比——仪表盘列头诚实标注
+- QJsonArray 无 reserve()（Qt 6.5）；QTextStream Qt5 须 setCodec("UTF-8")
+- E2E 场景 B（electron-lab 纯 CDP）为可选项，其 CDP 数据通路与混合会话完全
+  一致（S2 §7.3 已单独验证），本轮裁剪跳过

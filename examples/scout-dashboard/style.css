@@ -1,0 +1,39 @@
+/* style.css - scout-dashboard 交互层（V7 S3c）
+   仅作用于注入的交互区（dash-*/ft- 前缀），与静态章节样式零冲突。 */
+
+#dash-interactive h2, #dash-details-ix h2 { margin-top: 28px; }
+
+/* ---------- 筛选器 ---------- */
+#dash-filters { margin: 8px 0; font-size: 12px; }
+.ft-group { font-weight: 600; margin: 0 4px 0 14px; }
+.ft-chk { margin-right: 10px; white-space: nowrap; cursor: pointer; }
+.ft-chk input { vertical-align: -2px; }
+
+/* ---------- 冻结时间轴（泳道） ---------- */
+#ft-view { position: relative; overflow: hidden; background: #fff;
+           border: 1px solid #d8dce6; border-radius: 4px;
+           cursor: grab; user-select: none; }
+#ft-view:active { cursor: grabbing; }
+#ft-canvas { padding: 8px 0; }
+.ft-lane { display: flex; align-items: center; height: 30px; }
+.ft-label { flex: 0 0 230px; font-family: Consolas, monospace; font-size: 12px;
+            padding-left: 8px; overflow: hidden; text-overflow: ellipsis;
+            white-space: nowrap; }
+.ft-track { position: relative; flex: 1; height: 18px;
+            background: repeating-linear-gradient(90deg, #f2f4f8 0 1px, transparent 1px 80px); }
+.ft-inner { position: absolute; top: 0; left: 0; right: 0; height: 100%;
+            transform-origin: 0 0; will-change: transform; }
+.ft-span { position: absolute; top: 3px; height: 12px; border-radius: 3px;
+           min-width: 3px; cursor: help; }
+.ft-recovered { background: #4a90d9; }
+.ft-lost { background: #b9bfcc; }
+.ft-ongoing { background: repeating-linear-gradient(45deg, #f28b6b 0 6px, #f9c4b2 6px 12px); }
+#ft-tip { position: fixed; z-index: 10; background: #1f2430; color: #fff;
+          font-size: 12px; padding: 4px 8px; border-radius: 4px;
+          pointer-events: none; max-width: 420px; }
+
+/* ---------- 交互明细分页 ---------- */
+#dash-pagebar { margin: 8px 0; font-size: 12px; color: #8a90a0; }
+#dash-pagebar button { font-size: 12px; padding: 2px 10px; margin-left: 6px;
+                       cursor: pointer; }
+#dash-pagebar button:disabled { opacity: 0.4; cursor: default; }

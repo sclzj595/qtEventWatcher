@@ -3,6 +3,16 @@
 本文件记录 QtEventWatcher 的版本演进。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号对应仓库迭代里程碑（详细规划与逐 Phase 实施记录见 [docs/21_版本规划与交付物.md](docs/21_版本规划与交付物.md)）。
 
+## [v6.3.0] - 2026-10-02
+
+### 新增
+- **Scout 独立可视化仪表盘 S3**（V7，examples/scout-dashboard，docs/32 §9）：`scout-dashboard --in <aggregator JSON> --out <html>`——读 aggregator `--out` 快照生成单文件自包含 HTML 仪表盘（五章节：会话概览与健康度/冻结时间轴/CDP 长任务 per-url 直方/CPU 与慢事件/明细折叠）；交互版泳道时间轴（缩放/拖拽/双击复位/类型与 pid 筛选/分页）经 qrc 内嵌零依赖零构建链，资源缺失自动降级纯静态
+- scout-dashboard CLI 过滤：`--pid` / `--kind <csv 0..3>`，摘要与渲染/内嵌 JSON 共用 filterModel 同一口径
+- ScoutDashboardTests：8 用例 89 checks（解析/归类/跨午夜 relMs/容错/转义与 JSON 内嵌安全/filterModel），四矩阵纳入
+
+### 安全
+- XSS 三层分工：C++ escapeHtml（静态位）+ embedJsonSafe（`</`→`<\/` 封死 script 提前闭合，内嵌 JSON 唯一注入面）+ JS esc()（DOM 位）；进入 `<script>` 的内容（含 JS 注释）禁止字面闭合标签序列
+
 ## [v6.2.0] - 2026-10-01
 
 ### 新增

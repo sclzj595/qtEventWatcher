@@ -66,3 +66,25 @@ target_include_directories(BenchmarkEventWatcher
     PRIVATE
         ${PROJECT_SOURCE_DIR}/src/event
 )
+
+# ============================================================
+# ScoutDashboardTests - V7 S3 scout-dashboard 数据层单元测试
+# （纯 Qt::Core 消费方：DashboardModel 解析/归类/冻结分段/relMs 跨午夜）
+# ============================================================
+
+add_executable(ScoutDashboardTests
+    unit/ScoutDashboardTests.cpp
+    ${PROJECT_SOURCE_DIR}/examples/scout-dashboard/DashboardModel.cpp
+)
+
+target_link_libraries(ScoutDashboardTests
+    PRIVATE
+        Qt${QT_VERSION_MAJOR}::Core
+)
+
+target_include_directories(ScoutDashboardTests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/examples/scout-dashboard
+)
+
+add_test(NAME ScoutDashboardTests COMMAND ScoutDashboardTests)
