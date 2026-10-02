@@ -231,9 +231,10 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
             while read -r l; do echo "::error::$l"; done < missing_libs.txt
           fi
-          # Widgets 集成测试需平台插件显示；xvfb 无头跑（行尾 FAIL 与 exit 码双断言）
-          xvfb-run -a ./build-ci/bin/TestEventWatcher 2>&1 | tee smoke.log
-          ec=$?
+          # Widgets 集成测试需平台插件显示；xvfb 无头跑（行尾 FAIL 与 exit 码双断言）。
+          # 退出码用 || 捕获——bash -e 下管道失败会直接终止，ec=$? 写法永远不执行
+          ec=0
+          xvfb-run -a ./build-ci/bin/TestEventWatcher 2>&1 | tee smoke.log || ec=$?
           if [ $ec -ne 0 ]; then
             {
               echo "### Smoke failure (exit=$ec)"

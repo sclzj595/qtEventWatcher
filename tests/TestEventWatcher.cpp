@@ -106,12 +106,14 @@ int main(int argc, char* argv[])
     }
 
     // 自检断言：exe 自身 PE 解析必须成功；QtCore 必须出现在 import 列表且已加载
-    // （Qt5/Qt6 的 DLL 名不同，按编译期版本判定）
+    // （Qt5/Qt6 的 DLL 名不同，按编译期版本判定）——仅 Windows 有 PE Import 分析
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     const char* coreDllName = "Qt6Core.dll";
 #else
     const char* coreDllName = "Qt5Core.dll";
 #endif
+    int failures = 0;
+#ifdef _WIN32
     bool qt5CoreLoaded = false;
     for (const DependencyInfo& d : report.dependencies.dependencies) {
         if (d.name.compare(coreDllName, Qt::CaseInsensitive) == 0
@@ -119,11 +121,18 @@ int main(int argc, char* argv[])
             qt5CoreLoaded = true;
     }
 
-    int failures = 0;
     if (report.modulesOk && report.modules.isEmpty())          ++failures;
     if (!report.dependencies.ok)                               ++failures;
     if (report.dependencies.dependencies.isEmpty())            ++failures;
     if (!qt5CoreLoaded)                                        ++failures;
+#else
+    // 非 Windows：DependencyAnalyzer 尚未适配（unsupported platform 诚实降级，
+    // 模块/依赖列表为空是合法产物），仅断言降级自洽——不许 ok=yes 但列表为空
+    // 的矛盾态；qt5CoreLoaded 的 PE import 断言无意义，跳过
+    (void)coreDllName;
+    if (report.dependencies.ok && report.dependencies.dependencies.isEmpty())
+        ++failures;
+#endif
 
     // ---- 调用栈采集（V3 A1）：capture 自检 + 帧格式断言 ----
     {
@@ -137,6 +146,22 @@ int main(int argc, char* argv[])
         const bool topOk = top.find('!') != std::string::npos
             && top.find("0x") != std::string::npos;
         if (frames.empty() || frames.front().module.empty() || !topOk) {
+            std::cout << "  [STACK CAPTURE FAIL] frames=" << frames.size()
+                      << " top=" << top << std::endl;
+            ++failures;
+        } else {
+            std::cout << "  stack capture: " << frames.size()
+                      << " frames, top=" << top << std::endl;
+        }
+#elif defined(__linux__)
+        // Linux（glibc backtrace）：帧非空 + 顶帧格式 mod!0x...（dladdr 归因）；
+        // 较 Windows 少一个"顶帧模块必非空"强断（dladdr 未命中时模块为 '?'）
+        const std::size_t comma = stackText.find(',');
+        const std::string top = stackText.substr(0, comma == std::string::npos
+                                                     ? std::string::npos : comma);
+        const bool topOk = top.find('!') != std::string::npos
+            && top.find("0x") != std::string::npos;
+        if (frames.empty() || !topOk) {
             std::cout << "  [STACK CAPTURE FAIL] frames=" << frames.size()
                       << " top=" << top << std::endl;
             ++failures;
