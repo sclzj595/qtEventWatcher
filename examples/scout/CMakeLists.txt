@@ -40,6 +40,8 @@ target_link_libraries(scout
         QtEventWatcherCore
 )
 
+qew_deploy_qt_runtime(scout)	# V7.0.1：Qt 运行时随构建部署（含 WebSockets DLL）
+
 # S2：CDP 长任务探针——可选依赖 Qt WebSockets（Qt5/Qt6 官方二进制均自带）。
 # 缺失时禁用该探针并提示，不阻断构建（main.cpp 经 QEWT_SCOUT_CDP 条件接线）。
 find_package(Qt${QT_VERSION_MAJOR} COMPONENTS WebSockets QUIET)

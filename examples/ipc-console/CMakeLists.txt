@@ -11,3 +11,5 @@ target_link_libraries(ipc_console
         Qt${QT_VERSION_MAJOR}::Core
         Qt${QT_VERSION_MAJOR}::Network
 )
+
+qew_deploy_qt_runtime(ipc_console)	# V7.0.1：Qt 运行时随构建部署

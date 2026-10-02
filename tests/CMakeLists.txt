@@ -90,3 +90,9 @@ target_include_directories(ScoutDashboardTests
 )
 
 add_test(NAME ScoutDashboardTests COMMAND ScoutDashboardTests)
+
+# V7.0.1：Qt 运行时部署（windeployqt）——构建树自包含，无 PATH 注入亦可启动
+qew_deploy_qt_runtime(TestEventWatcher)
+qew_deploy_qt_runtime(UnitTests)
+qew_deploy_qt_runtime(BenchmarkEventWatcher)
+qew_deploy_qt_runtime(ScoutDashboardTests)

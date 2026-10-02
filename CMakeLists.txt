@@ -103,6 +103,40 @@ endfunction()
 
 
 # ============================================================
+# Qt 运行时部署（V7.0.1）：windeployqt 基建化
+# ============================================================
+
+# 背景：此前 bin 目录的 Qt5Core/Gui/Widgets/Network 等 DLL 是历史手动
+# windeployqt 产物，不受 CMake 管理——clean build 后全部丢失；且 scout 的
+# QtWebSockets 依赖从未被任何部署覆盖（exe 旁缺 Qt5WebSockets.dll，双击
+# 直启即 0xC0000135）。测试/e2e 脚本注入 PATH 掩盖了缺 DLL（动态库按 PATH
+# 命中），无 PATH 的普通启动才暴露。
+# 统一 POST_BUILD 调 windeployqt（与 qmake 同目录）部署目标实际链接的
+# Qt DLL + 插件类目（platforms/imageformats/iconengines/styles），构建树
+# 自包含可复现；--no-opengl-sw/--no-translations 裁剪非必需大件，与既有
+# 手动产物布局一致（libEGL/libGLESv2 保留=ANGLE 默认）。
+# sqldrivers 类目 windeployqt 默认不部署，仍由 qew_deploy_sql_plugins 补齐。
+# MinGW 不接入（保持 PATH 注入方式，避免 libgcc 运行时部署行为差异）。
+function(qew_deploy_qt_runtime target)
+    if (WIN32 AND MSVC AND TARGET Qt${QT_VERSION_MAJOR}::qmake)
+        get_target_property(_qmake_loc Qt${QT_VERSION_MAJOR}::qmake LOCATION)
+        get_filename_component(_qt_bin "${_qmake_loc}" DIRECTORY)
+        if (EXISTS "${_qt_bin}/windeployqt.exe")
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND "${_qt_bin}/windeployqt.exe"
+                    --no-translations
+                    --no-system-d3d-compiler
+                    --no-opengl-sw
+                    --no-quick-import
+                    "$<TARGET_FILE:${target}>"
+                COMMENT "Deploying Qt runtime (windeployqt) -> ${target}"
+            )
+        endif ()
+    endif ()
+endfunction()
+
+
+# ============================================================
 # Global Build Options
 # ============================================================
 

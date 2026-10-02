@@ -28,3 +28,5 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets.qrc")
     target_sources(scout-dashboard PRIVATE assets.qrc)
     target_compile_definitions(scout-dashboard PRIVATE QEWT_DASHBOARD_EMBED=1)
 endif()
+
+qew_deploy_qt_runtime(scout-dashboard)	# V7.0.1：Qt 运行时随构建部署

@@ -12,3 +12,5 @@ target_link_libraries(aggregator
     PRIVATE
         QtEventWatcherCore
 )
+
+qew_deploy_qt_runtime(aggregator)	# V7.0.1：Qt 运行时随构建部署

@@ -31,3 +31,4 @@ target_link_libraries(basic_demo
 )
 
 qew_deploy_sql_plugins(basic_demo)	# V3 C1：.db 导出在部署形态下开箱可用
+qew_deploy_qt_runtime(basic_demo)	# V7.0.1：Qt 运行时随构建部署

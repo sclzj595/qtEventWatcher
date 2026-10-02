@@ -3,6 +3,11 @@
 本文件记录 QtEventWatcher 的版本演进。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号对应仓库迭代里程碑（详细规划与逐 Phase 实施记录见 [docs/21_版本规划与交付物.md](docs/21_版本规划与交付物.md)）。
 
+## [Unreleased]
+
+### 修复
+- **Qt 运行时部署基建化**（`qew_deploy_qt_runtime`）：scout.exe 旁缺 `Qt5WebSockets.dll`（CDP 探针依赖从未被部署覆盖，双击直启即 0xC0000135），且 bin 目录既有 Qt DLL 为历史手动 windeployqt 产物、clean build 后全丢——9 个可执行目标统一 POST_BUILD 接入 windeployqt（MSVC 守卫，MinGW/Linux 保持原方式），构建树自包含可复现；`--no-translations/--no-opengl-sw` 裁剪非必需大件，sqldrivers 类目仍由 `qew_deploy_sql_plugins` 补齐；无 PATH 注入直启验证通过（basic_demo/scout 双实例）
+
 ## [v7.0.0] - 2026-10-02
 
 ### 新增
