@@ -46,3 +46,15 @@ else()
     message(STATUS "scout: Qt${QT_VERSION_MAJOR}::WebSockets not found, "
                    "CDP long-task prober disabled")
 endif()
+
+# L3：X11 冻结探针（Linux 可选依赖——X11 桌面/麒麟 UKUI 场景）。Wayland
+# native 无外部探针协议，X11 缺失时禁用该探针不阻断构建，沿 WebSockets 先例
+if (UNIX AND NOT APPLE)
+    find_package(X11 QUIET)
+    if (TARGET X11::X11)
+        target_compile_definitions(scout PRIVATE QEWT_SCOUT_X11=1)
+        target_link_libraries(scout PRIVATE X11::X11)
+    else()
+        message(STATUS "scout: X11 not found, window freeze prober disabled")
+    endif()
+endif()

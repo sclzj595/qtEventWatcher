@@ -208,6 +208,19 @@ jobs:
           grep -q 'event=cpuSpin' scout.log \
             || { echo "::error::scout e2e: cpuSpin line missing"; exit 1; }
 
+      - name: Scout e2e - freeze probe (xvfb)
+        run: |
+          set -o pipefail
+          # 主线程 busy-loop 6s = 消息泵停摆：_NET_WM_PING 无应答 → freeze started；
+          # 7.5s 后忙转结束泵恢复 → recovered（threshold 2000 下界口径）
+          timeout 9 xvfb-run -a ./build-ci/bin/basic_demo --spin 6000 > basic_demo2.log 2>&1 &
+          sleep 1.5
+          xvfb-run -a ./build-ci/bin/scout --name basic_demo --threshold 2000 --duration 9000 2>&1 | tee scout_freeze.log
+          grep -q 'freeze started' scout_freeze.log \
+            || { echo "::error::scout e2e: freeze started line missing"; exit 1; }
+          grep -q 'freeze recovered' scout_freeze.log \
+            || { echo "::error::scout e2e: freeze recovered line missing"; exit 1; }
+
       - name: Upload smoke log
         if: always()
         uses: actions/upload-artifact@v4
