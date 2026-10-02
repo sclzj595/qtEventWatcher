@@ -4,8 +4,13 @@ build-qt6/
 build-mingw5/
 build-mingw6/
 build-asan/
-build-aqtci/	# CI 环境本地复现（aqt 装 Qt6.5.3 + VS2019）
+# CI 环境本地复现（aqt 装 Qt6.5.3 + VS2019）；注意：gitignore 不支持行尾注释，
+# 注释必须独占一行，否则整行 pattern 失效（build-aqtci 曾因此漏网）
+build-aqtci/
 out/
+
+# Trae 本地工作产物（commit 草稿/Release 草稿/计划文档，不入库）
+.trae/
 
 # VS 链接副产物（PDB 合并临时文件）
 vc140.pdb
