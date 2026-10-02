@@ -414,6 +414,12 @@ void RadarScheduler::run()
 		QHash<qint64, ProbeLogic::CpuEpisodeTracker> cpuEpisodes;
 		QHash<qint64, double> lastCpuMs;
 
+		// 配置热加载状态（V1 R3b）：kNoConfigMtime = 未加载哨兵（与 Windows
+		// 分支同名局部——各平台分支独立作用域，互不冲突）
+		static constexpr qint64 kNoConfigMtime = std::numeric_limits<qint64>::min();
+		qint64 lastConfigMtime = kNoConfigMtime;
+		bool configWarned = false;
+
 		while (m_running) {
 			QElapsedTimer tick;
 			tick.start();

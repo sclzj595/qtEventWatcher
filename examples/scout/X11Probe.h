@@ -152,3 +152,9 @@ inline bool pingWindow(Display *dpy, Atom wmProtocolsAtom, Atom pingAtom,
 
 } // namespace X11Probe
 } // namespace qt_event_watcher
+
+// X11 历史遗留宏污染清退：Xlib.h 将 None/Bool/Status 等定义为宏，会撕碎
+// 下游 TU 里的同名标识符（ProbeLogic::FreezeEvent::None 的 case 标签被
+// `#define None 0L` 展开即编译炸——CI linux-smoke 实证）。本头是 scout
+// 唯一 X11 入口，在此统一 undef；后续若调 X API 需传 None，改写字面 0L
+#undef None

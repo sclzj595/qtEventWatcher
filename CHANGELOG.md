@@ -16,6 +16,7 @@
 - **本地一键 e2e**：`scripts/e2e_scout.ps1` 四场景（cpu/freeze/radar/uplink）断言健康自洽，Windows 本地可重复执行
 
 ### 修复
+- **Linux X11 编译修复**：Xlib.h 将 `None` 定义为宏（`0L`），撕碎下游 TU 的 `ProbeLogic::FreezeEvent::None` case 标签——`X11Probe.h`（scout 唯一 X11 入口）末尾统一 `#undef None`；`RadarScheduler` Linux 分支补配置热加载状态声明（`lastConfigMtime`/`configWarned` 漏在 Windows 分支作用域内，本地 Windows 四矩阵被 `Q_OS_WIN` 屏蔽测不出，CI linux-smoke 暴露）
 - `ScoutAlarmEmitter`：方法名不可叫 `emit`——Qt 将 `emit` 定义为空宏（signal 关键字），会把函数签名整行撕碎并炸穿下游所有 Qt 头，改名 `emitAlarm`
 - `RadarScheduler`：cpuRuns 热更后仅新 episode 生效（既有 episode 的 runsNeeded 为构造期常量）——诚实边界，docs/34 §7 记录
 
