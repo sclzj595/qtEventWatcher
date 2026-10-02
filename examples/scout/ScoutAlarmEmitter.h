@@ -41,6 +41,19 @@ public:
 						 d.suppressedFlushed, key);
 	}
 
+	/// 直通发射（不进抑制器）：freeze 三态配对边界（started/recovered/lost）
+	/// 专用。配对语义强约束——任一条被吞都会破坏下游冻结时间线配对：
+	/// CI 慢机上 started 落在忙转尾段、recovered 下一拍即到（间隔 <1s 窗口），
+	/// 同 key 第二条被静默降 DEBUG 后控制台不可见（Run 26 实证回归）。
+	/// 高频过程条（ongoing 心跳 / cpuSpin / cdp longtask）仍走 emitAlarm。
+	/// key 与 emitAlarm 同形仅为调用点替换一致性，直通路径不使用。
+	template <typename... Args>
+	void emitAlarmNow(const std::string &key, const char *fmtStr, Args &&...args)
+	{
+		(void)key;
+		QEW_LOG_WARN(fmtStr, std::forward<Args>(args)...);
+	}
+
 private:
 	AlarmSuppressor m_suppressor;
 };

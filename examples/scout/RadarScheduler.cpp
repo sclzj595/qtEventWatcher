@@ -1,4 +1,4 @@
-#include "RadarScheduler.h"
+﻿#include "RadarScheduler.h"
 
 #include "ProbeLogic.h"
 #include "RadarConfig.h"
@@ -150,7 +150,7 @@ void RadarScheduler::run()
 			if (!alive.contains(it.key())) {
 				if (it.value().tracker.onTargetGone().kind
 					== ProbeLogic::FreezeEvent::Lost) {
-					m_alarm.emitAlarm("freeze:" + it.value().recvName.toStdString(),
+					m_alarm.emitAlarmNow("freeze:" + it.value().recvName.toStdString(),
 								 "[FreezeWatch] freeze lost receiver={:s} type=0 radar=1",
 								 it.value().recvName.toStdString());
 				}
@@ -221,7 +221,7 @@ void RadarScheduler::run()
 			switch (ev.kind) {
 			case ProbeLogic::FreezeEvent::Started:
 				rt.recvName = ProbeLogic::receiverOf(name, pid);
-				m_alarm.emitAlarm("freeze:" + rt.recvName.toStdString(),
+				m_alarm.emitAlarmNow("freeze:" + rt.recvName.toStdString(),
 							 "[FreezeWatch] freeze started thresholdMs={} stalledMs={} "
 							 "receiver={:s} type=0 inProgress=false radar=1",
 							 m_thresholdMs, ev.stalledMs, rt.recvName.toStdString());
@@ -233,13 +233,13 @@ void RadarScheduler::run()
 							 ev.totalMs, rt.recvName.toStdString());
 				break;
 			case ProbeLogic::FreezeEvent::Recovered:
-				m_alarm.emitAlarm("freeze:" + rt.recvName.toStdString(),
+				m_alarm.emitAlarmNow("freeze:" + rt.recvName.toStdString(),
 							 "[FreezeWatch] freeze recovered totalMs={} "
 							 "receiver={:s} type=0 inProgress=false radar=1",
 							 ev.totalMs, rt.recvName.toStdString());
 				break;
 			case ProbeLogic::FreezeEvent::Lost:
-				m_alarm.emitAlarm("freeze:" + rt.recvName.toStdString(),
+				m_alarm.emitAlarmNow("freeze:" + rt.recvName.toStdString(),
 							 "[FreezeWatch] freeze lost receiver={:s} type=0 radar=1",
 							 rt.recvName.toStdString());
 				break;
@@ -477,7 +477,7 @@ void RadarScheduler::run()
 				if (!alive.contains(it.key())) {
 					if (it.value().tracker.onTargetGone().kind
 						== ProbeLogic::FreezeEvent::Lost) {
-						m_alarm.emitAlarm("freeze:" + it.value().recvName.toStdString(),
+						m_alarm.emitAlarmNow("freeze:" + it.value().recvName.toStdString(),
 									 "[FreezeWatch] freeze lost receiver={:s} type=0 radar=1",
 									 it.value().recvName.toStdString());
 					}
@@ -545,7 +545,7 @@ void RadarScheduler::run()
 			switch (ev.kind) {
 			case ProbeLogic::FreezeEvent::Started:
 				rt.recvName = ProbeLogic::receiverOf(name, pid);
-				m_alarm.emitAlarm("freeze:" + rt.recvName.toStdString(),
+				m_alarm.emitAlarmNow("freeze:" + rt.recvName.toStdString(),
 							 "[FreezeWatch] freeze started thresholdMs={} stalledMs={} "
 							 "receiver={:s} type=0 inProgress=false radar=1",
 							 m_thresholdMs, ev.stalledMs, rt.recvName.toStdString());
@@ -557,13 +557,13 @@ void RadarScheduler::run()
 							 ev.totalMs, rt.recvName.toStdString());
 				break;
 			case ProbeLogic::FreezeEvent::Recovered:
-				m_alarm.emitAlarm("freeze:" + rt.recvName.toStdString(),
+				m_alarm.emitAlarmNow("freeze:" + rt.recvName.toStdString(),
 							 "[FreezeWatch] freeze recovered totalMs={} "
 							 "receiver={:s} type=0 inProgress=false radar=1",
 							 ev.totalMs, rt.recvName.toStdString());
 				break;
 			case ProbeLogic::FreezeEvent::Lost:
-				m_alarm.emitAlarm("freeze:" + rt.recvName.toStdString(),
+				m_alarm.emitAlarmNow("freeze:" + rt.recvName.toStdString(),
 							 "[FreezeWatch] freeze lost receiver={:s} type=0 radar=1",
 							 rt.recvName.toStdString());
 				break;

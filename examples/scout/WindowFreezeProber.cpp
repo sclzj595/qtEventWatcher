@@ -1,4 +1,4 @@
-#include "WindowFreezeProber.h"
+﻿#include "WindowFreezeProber.h"
 
 #include "ProbeLogic.h"
 #include "TargetResolver.h"
@@ -110,7 +110,7 @@ void WindowFreezeProber::run()
 		case ProbeLogic::FreezeEvent::Started:
 			recvName = proc;
 			// stalledMs 保守取阈值下界：外部探针只能保证"至少已停滞 threshold"
-			m_alarm.emitAlarm("freeze:" + recvName.toStdString(),
+			m_alarm.emitAlarmNow("freeze:" + recvName.toStdString(),
 						 "[FreezeWatch] freeze started thresholdMs={} stalledMs={} "
 						 "receiver={:s} type=0 inProgress=false",
 						 m_thresholdMs, ev.stalledMs, recvName.toStdString());
@@ -122,13 +122,13 @@ void WindowFreezeProber::run()
 						 ev.totalMs, recvName.toStdString());
 			break;
 		case ProbeLogic::FreezeEvent::Recovered:
-			m_alarm.emitAlarm("freeze:" + recvName.toStdString(),
+			m_alarm.emitAlarmNow("freeze:" + recvName.toStdString(),
 						 "[FreezeWatch] freeze recovered totalMs={} "
 						 "receiver={:s} type=0 inProgress=false",
 						 ev.totalMs, recvName.toStdString());
 			break;
 		case ProbeLogic::FreezeEvent::Lost:
-			m_alarm.emitAlarm("freeze:" + recvName.toStdString(),
+			m_alarm.emitAlarmNow("freeze:" + recvName.toStdString(),
 						 "[FreezeWatch] freeze lost receiver={:s} type=0",
 						 recvName.toStdString());
 			break;
@@ -244,7 +244,7 @@ void WindowFreezeProber::run()
 		case ProbeLogic::FreezeEvent::Started:
 			recvName = proc;
 			// stalledMs 保守取阈值下界：外部探针只能保证"至少已停滞 threshold"
-			m_alarm.emitAlarm("freeze:" + recvName.toStdString(),
+			m_alarm.emitAlarmNow("freeze:" + recvName.toStdString(),
 						 "[FreezeWatch] freeze started thresholdMs={} stalledMs={} "
 						 "receiver={:s} type=0 inProgress=false",
 						 m_thresholdMs, ev.stalledMs, recvName.toStdString());
@@ -256,13 +256,13 @@ void WindowFreezeProber::run()
 						 ev.totalMs, recvName.toStdString());
 			break;
 		case ProbeLogic::FreezeEvent::Recovered:
-			m_alarm.emitAlarm("freeze:" + recvName.toStdString(),
+			m_alarm.emitAlarmNow("freeze:" + recvName.toStdString(),
 						 "[FreezeWatch] freeze recovered totalMs={} "
 						 "receiver={:s} type=0 inProgress=false",
 						 ev.totalMs, recvName.toStdString());
 			break;
 		case ProbeLogic::FreezeEvent::Lost:
-			m_alarm.emitAlarm("freeze:" + recvName.toStdString(),
+			m_alarm.emitAlarmNow("freeze:" + recvName.toStdString(),
 						 "[FreezeWatch] freeze lost receiver={:s} type=0",
 						 recvName.toStdString());
 			break;
