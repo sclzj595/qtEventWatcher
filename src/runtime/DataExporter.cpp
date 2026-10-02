@@ -455,7 +455,7 @@ bool exportSqlite(const QString& filePath, const WatchConfig* config,
 					const QJsonObject e = v.toObject();
 					statQuery.addBindValue(periodIdx);
 					statQuery.addBindValue(isLive ? 1 : 0);
-					statQuery.addBindValue(period.periodMs);
+					statQuery.addBindValue(static_cast<qlonglong>(period.periodMs));
 					statQuery.addBindValue(e.value(QStringLiteral("event")).toString());
 					statQuery.addBindValue(e.value(QStringLiteral("count")).toInt());
 					statQuery.addBindValue(e.value(QStringLiteral("totalCostMs")).toDouble());
