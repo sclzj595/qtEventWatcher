@@ -12,6 +12,10 @@ set(SCOUT_SOURCES
     CpuSampler.cpp
     CpuSampler.h
     TargetResolver.h
+    RadarScheduler.cpp
+    RadarScheduler.h
+    RadarDiscover.h
+    X11Probe.h
 )
 
 add_executable(scout

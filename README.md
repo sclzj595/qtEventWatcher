@@ -149,7 +149,7 @@ ctest -C Release                                        # 冒烟测试（在 bui
 ## Roadmap
 
 - [x] **V6 质量证明线**：纯逻辑单元测试 + 静态分析门禁 + ASan 实证（[docs/31](docs/31_V6实施计划.md)）
-- [ ] **Scout 外部探针（产品线 B）**：进程外检测任意桌面程序（Electron/**Tauri**/WPF/Win32）的卡顿，统一汇入 aggregator 报告——**S1 已交付**：T1 窗口冻结 + T1b CPU 启发（[examples/scout](examples/scout/)，[docs/32](docs/32_V7-Scout实施计划.md)）；**S2 已交付**：T2 CDP 长任务——`scout --cdp-port 9222` 直连 Electron/Chromium 页面，PerformanceObserver 精确到渲染长任务（目标带 `--remote-debugging-port` 冷启动）；**Tauri 已实证**：T1/T1b/T2 全通过（WebView2 端口经 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 注入，孙进程 CPU 采样已覆盖）
+- [x] **Scout 外部探针（产品线 B）**：进程外检测任意桌面程序（Electron/**Tauri**/WPF/Win32）的卡顿，统一汇入 aggregator 报告——**S1 已交付**：T1 窗口冻结 + T1b CPU 启发（[examples/scout](examples/scout/)，[docs/32](docs/32_V7-Scout实施计划.md)）；**S2 已交付**：T2 CDP 长任务——`scout --cdp-port 9222` 直连 Electron/Chromium 页面，PerformanceObserver 精确到渲染长任务（目标带 `--remote-debugging-port` 冷启动）；**Tauri 已实证**：T1/T1b/T2 全通过（WebView2 端口经 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 注入，孙进程 CPU 采样已覆盖）；**V8 雷达已交付**：`scout --radar` 常驻守护全机所有 GUI 程序的卡顿（自动发现窗口归属进程、单线程轮询、`receiver=name@pid` 实例级归因，[docs/33](docs/33_V8-系统级ANR雷达实施计划.md)）
 - [x] **Linux 探针适配**（v6.4.0）：Scout 三探针 Linux 全可用——调用栈（backtrace+dladdr）、进程解析与 CPU 采样（/proc）、窗口冻结（X11 _NET_WM_PING，Xvfb/无 WM 兜底）；CI 双矩阵（Qt 5.15/6.5 × gcc）编译+冒烟+CPU/冻结 e2e（[docs/32 §10](docs/32_V7-Scout实施计划.md)）；Wayland native 应用暂走降级（CPU/CDP 探针不受影响）
 - [ ] QML/Qt Quick 事件路径支持（当前面向 Widgets）
 - [ ] 火焰图导出（调用栈数据已具备，缺渲染端）

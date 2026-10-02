@@ -3,6 +3,21 @@
 本文件记录 QtEventWatcher 的版本演进。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号对应仓库迭代里程碑（详细规划与逐 Phase 实施记录见 [docs/21_版本规划与交付物.md](docs/21_版本规划与交付物.md)）。
 
+## [v6.5.0] - 2026-10-02
+
+### 新增
+- **系统级 ANR 雷达**（V8，docs/33）：`scout --radar` 常驻守护全机所有 GUI 程序的卡顿——
+  - **全机发现**：每拍枚举"拥有可见顶层窗口"的进程集（Windows 单趟 EnumWindows + 单次 Toolhelp 快照建名表 / Linux X11 `_NET_WM_PID` 归属），天然覆盖 Qt/Electron/WPF/Win32/GTK，天然过滤无窗口后台进程
+  - **单线程轮询**：全机目标共享一个 worker 线程（不随目标数增长线程/fd），per-target 三态状态机逐字段对齐 WindowFreezeProber；增量管理（新目标入册 / 消失目标 freeze lost 收口）；进程名缓存只解析新 pid
+  - **零改动渲染**：告警行沿用 `[FreezeWatch]` 前缀 + `receiver=name@pid`（实例级唯一，防同名多开三态配对串扰）+ `radar=1` 标注——aggregator/HTML/仪表盘/导出原样渲染
+  - `--radar-exclude <name1,name2>` 进程名子串排除表（大小写不敏感）；`--radar` 与 `--pid/--name` 互斥、可与 `--cdp-port` 并存
+  - X11 探活原语抽出共享头 `X11Probe.h`（T1 单目标探针与雷达共用，token 改进程级单例跨 TU 防串扰）；CI 新增 linux 雷达 e2e（Xvfb 内雷达自动发现 busy-loop 靶 → freeze 三态断言）
+  - Wayland native / 无 X display 诚实降级（日志明示，CDP 探针不受影响）
+
+### 修复
+- `RadarScheduler`：`QHash::unite` 是 Qt5 专属（Qt6 移除）——显式 insert 循环兼容 Qt5/Qt6 双版本
+- `RadarScheduler`：目标消亡竞态修复——kill 恰落在探活消息在途时，`SendMessageTimeoutW` 对垂死窗口返回非 0 被误判 recovered，freeze lost 永不可达；recovered 前以内核对象信号态（Windows `WaitForSingleObject` 100ms 宽限）/ zombie 态（Linux `/proc/<pid>/stat` state != Z）真判存活，死进程一律收口 freeze lost；X11 段装 no-op XError handler（雷达长驻下枚举与探活间隙目标窗口随时消亡，BadWindow 默认处理器会终止进程）
+
 ## [v6.4.0] - 2026-10-02
 
 ### 新增

@@ -329,6 +329,45 @@ jobs:
             exit 1
           fi
 
+      - name: Scout e2e - radar mode (shared Xvfb)
+        run: |
+          set -o pipefail
+          # V8 雷达：免 --name/--pid——雷达全机发现"窗口归属 GUI 进程"逐个探活。
+          # fresh Xvfb 里唯一带窗进程就是 busy-loop 的 basic_demo，必被发现；
+          # 6s 忙转 → freeze started（receiver=name@pid 实例级唯一 + radar=1）；
+          # 7.5s 后泵恢复 → recovered
+          export LD_LIBRARY_PATH="/opt/qt/${{ matrix.qtVersion }}/${{ matrix.qtArch }}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          timeout 25 xvfb-run -a bash -c '
+            ./build-ci/bin/basic_demo --spin 6000 > basic_demo3.log 2>&1 &
+            demo=$!
+            sleep 1.5
+            ./build-ci/bin/scout --radar --threshold 2000 --interval 500 --duration 9000 2>&1 | tee scout_radar.log
+            kill $demo 2>/dev/null || true
+          ' || ec=$?
+          ec=${ec:-0}
+          if ! grep -q 'freeze started' scout_radar.log || ! grep -q 'radar=1' scout_radar.log; then
+            {
+              echo "### Scout radar e2e failure (no started/radar line, script-ec=$ec)"
+              echo '```'
+              tail -40 scout_radar.log
+              echo '--- basic_demo3.log ---'
+              tail -20 basic_demo3.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::scout e2e: radar freeze started line missing"
+            exit 1
+          fi
+          if ! grep -q 'freeze recovered' scout_radar.log; then
+            {
+              echo "### Scout radar e2e failure (no recovered line)"
+              echo '```'
+              tail -40 scout_radar.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::scout e2e: radar freeze recovered line missing"
+            exit 1
+          fi
+
       - name: Upload smoke log
         if: always()
         uses: actions/upload-artifact@v4
