@@ -5,6 +5,9 @@
 
 ## [Unreleased]
 
+### 新增
+- **一键打包分发**：仓库根 `打包.bat` 双击即出可分发 zip——增量构建（缺 build 目录自动 CMake 配置）→ 组装自包含产物（scout/aggregator/scout-dashboard/basic_demo + 全部 Qt 运行件 + 插件目录 + 快速上手说明 + radar.ini 配置样例 + CHANGELOG）→ 完整性自检（Qt5Core/WebSockets/Network/Sql/qwindows/qsqlite 六项）→ 裸机冒烟（PATH 剥离直启 scout，exit=2 usage 即加载链完整）→ `dist/QtEventWatcher-Scout-win64-<tag>-<时间戳>.zip`；包内说明文档与雷达配置样例在 `scripts/dist/` 维护
+
 ### 修复
 - **Qt 运行时部署基建化**（`qew_deploy_qt_runtime`）：scout.exe 旁缺 `Qt5WebSockets.dll`（CDP 探针依赖从未被部署覆盖，双击直启即 0xC0000135），且 bin 目录既有 Qt DLL 为历史手动 windeployqt 产物、clean build 后全丢——9 个可执行目标统一 POST_BUILD 接入 windeployqt（MSVC 守卫，MinGW/Linux 保持原方式），构建树自包含可复现；`--no-translations/--no-opengl-sw` 裁剪非必需大件，sqldrivers 类目仍由 `qew_deploy_sql_plugins` 补齐；无 PATH 注入直启验证通过（basic_demo/scout 双实例）
 
