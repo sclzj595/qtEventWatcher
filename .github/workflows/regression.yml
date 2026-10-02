@@ -263,7 +263,22 @@ jobs:
           timeout 8 xvfb-run -a ./build-ci/bin/basic_demo --spin 6000 > basic_demo.log 2>&1 &
           sleep 2
           # scout 挂名采样 10s（3 拍迟滞 × 250ms << 6s 忙转，必命中 cpuSpin）
-          xvfb-run -a ./build-ci/bin/scout --name basic_demo --cpu-threshold 95 --duration 10000 2>&1 | tee scout.log
+          # 退出码单独捕获：crash/早退路径也取证（bash -e 下管道失败即终止，
+          # 不捕获就只剩裸 exit 1）
+          ec=0
+          xvfb-run -a ./build-ci/bin/scout --name basic_demo --cpu-threshold 95 --duration 10000 2>&1 | tee scout.log || ec=$?
+          if [ $ec -ne 0 ]; then
+            {
+              echo "### Scout exited $ec (cpu e2e)"
+              echo '```'
+              tail -40 scout.log
+              echo '--- basic_demo.log ---'
+              tail -20 basic_demo.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::scout exited $ec before grep assertion"
+            exit $ec
+          fi
           if ! grep -q 'event=cpuSpin' scout.log; then
             {
               echo "### Scout cpu e2e failure"
@@ -288,12 +303,15 @@ jobs:
             sleep 1.5
             ./build-ci/bin/scout --name basic_demo --threshold 2000 --duration 9000 2>&1 | tee scout_freeze.log
             kill $demo 2>/dev/null || true
-          '
+          ' || ec=$?
+          ec=${ec:-0}
           if ! grep -q 'freeze started' scout_freeze.log; then
             {
-              echo "### Scout freeze e2e failure (no started line)"
+              echo "### Scout freeze e2e failure (no started line, script-ec=$ec)"
               echo '```'
               tail -40 scout_freeze.log
+              echo '--- basic_demo2.log ---'
+              tail -20 basic_demo2.log
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             echo "::error::scout e2e: freeze started line missing"
@@ -316,4 +334,16 @@ jobs:
         with:
           name: smoke-${{ matrix.name }}
           path: smoke.log
+          if-no-files-found: ignore
+
+      - name: Upload e2e logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-${{ matrix.name }}
+          path: |
+            scout.log
+            scout_freeze.log
+            basic_demo.log
+            basic_demo2.log
           if-no-files-found: ignore
