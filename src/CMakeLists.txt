@@ -90,6 +90,12 @@ if (WIN32)
     target_link_libraries(QtEventWatcherCore PRIVATE psapi)
 endif ()
 
+# Linux：StackCapture 用 dladdr（glibc 2.34 前符号在 libdl，如麒麟 V10 的
+# glibc 2.28）；CMAKE_DL_LIBS 在无需显式 dl 的平台上为空，跨发行版安全
+if (UNIX AND NOT APPLE)
+    target_link_libraries(QtEventWatcherCore PRIVATE ${CMAKE_DL_LIBS})
+endif ()
+
 # V3 A2：风暴抑制静默条走 QEW_LOG_DEBUG（运行时门控）。spdlog 默认
 # SPDLOG_ACTIVE_LEVEL=INFO 会把 DEBUG 宏编译期剥离为空，必须显式放开；
 # PUBLIC 使测试/Demo 等 consumer TU 的宏展开同样生效

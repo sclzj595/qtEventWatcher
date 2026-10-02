@@ -129,3 +129,78 @@ jobs:
           name: smoke-${{ matrix.name }}
           path: smoke.log
           if-no-files-found: ignore
+
+  # ============================================================
+  # Linux 编译基线 + 探针 e2e（里程碑 #8：Ubuntu runner 无头验证）
+  # libx11-dev：Scout X11 冻结探针；xvfb：Widgets 冒烟与 e2e 验证靶无头跑。
+  # Qt 前缀固定 /opt/qt/<ver>/gcc_64（aqt linux 布局确定，无需 Windows 版
+  # 的 dll 搜索兜底）。
+  # ============================================================
+  linux-smoke:
+    name: linux-smoke (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: qt5152-gcc
+            qtVersion: '5.15.2'
+            qtArch: gcc_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev xvfb
+
+      - name: Install Qt (${{ matrix.qtVersion }})
+        run: |
+          pip install aqtinstall
+          aqt install-qt linux desktop ${{ matrix.qtVersion }} ${{ matrix.qtArch }} --outputdir /opt/qt
+          test -d "/opt/qt/${{ matrix.qtVersion }}/${{ matrix.qtArch }}" \
+            || { echo "::error::Qt prefix missing under /opt/qt"; exit 1; }
+
+      - name: Configure
+        run: cmake -S . -B build-ci -DCMAKE_PREFIX_PATH=/opt/qt/${{ matrix.qtVersion }}/${{ matrix.qtArch }}
+
+      - name: Build
+        run: |
+          set -o pipefail
+          cmake --build build-ci --parallel 2>&1 | tee build.log
+
+      - name: Report build errors
+        if: failure()
+        run: |
+          if [ ! -f build.log ]; then echo "::error::build.log missing"; exit 0; fi
+          {
+            echo "### Build errors"
+            echo '```'
+            grep -E -m 20 'error:|undefined reference|fatal error|Error [0-9]' build.log || tail -40 build.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E 'error:|undefined reference|fatal error|Error [0-9]' build.log | head -20 | while read -r l; do echo "::error::$l"; done || true
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.name }}
+          path: build.log
+          if-no-files-found: ignore
+
+      - name: Smoke (xvfb)
+        run: |
+          set -o pipefail
+          # Widgets 集成测试需平台插件显示；xvfb 无头跑（行尾 FAIL 与 exit 码双断言）
+          xvfb-run -a ./build-ci/bin/TestEventWatcher 2>&1 | tee smoke.log
+          if grep -q FAIL smoke.log; then echo "::error::smoke reported FAIL lines"; exit 1; fi
+
+      - name: Upload smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.name }}
+          path: smoke.log
+          if-no-files-found: ignore
