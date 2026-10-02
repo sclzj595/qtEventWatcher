@@ -232,9 +232,9 @@ QList<TargetWindow> collectTargetWindows(Display *dpy, Window root,
 }
 
 /// 单窗口探活：发 _NET_WM_PING（event_mask=0 → 送达创建该窗口的 client，
-/// 与 WM 探测同路径），阈值内等应用原样回传的 pong（Qt/GTK 均逐字段 echo
-/// 到 root，SubstructureNotifyMask 使本探针收到副本）。无 pong = hung，
-/// 与 SendMessageTimeoutW(WM_NULL, SMTO_ABORTIFHUNG) 同语义。
+/// 与 WM 探测同路径），阈值内等应用原样回传的 pong（Qt/GTK 均整包 echo
+/// 到 root，探针选 StructureNotifyMask 收副本，见 run() 内注释）。无 pong
+/// = hung，与 SendMessageTimeoutW(WM_NULL, SMTO_ABORTIFHUNG) 同语义。
 bool pingWindow(Display *dpy, Atom pingAtom, Window win, int thresholdMs)
 {
 	const unsigned long token = g_pingToken.fetch_add(1);
@@ -313,9 +313,13 @@ void WindowFreezeProber::run()
 	Window root = DefaultRootWindow(dpy);
 	const Atom pingAtom = XInternAtom(dpy, "_NET_WM_PING", False);
 	const Atom pidAtom = XInternAtom(dpy, "_NET_WM_PID", False);
-	// pong 回流：应用把 _NET_WM_PING 回发 root（SubstructureNotify 语义），
-	// 选上该 mask 即收到副本（有无 WM 均成立——XSendEvent 按选择掩码广播）
-	XSelectInput(dpy, root, SubstructureNotifyMask);
+	// pong 回流：Qt xcb 收到 ping 后整包 echo 到 root（qxcbwindow.cpp
+	// handleClientMessageEvent：reply 整包拷贝仅改 window=root，data/token
+	// 原样），回发 event_mask=StructureNotify|SubstructureRedirect——探针
+	// 选 root 的 StructureNotifyMask 即与回发 mask 有交集必达（注意不是
+	// SubstructureNotifyMask：两者是不同掩码位，选错则 pong 永远收不到；
+	// SubstructureRedirect 是 WM 独占掩码不可选；WM 在/不在均成立）
+	XSelectInput(dpy, root, StructureNotifyMask);
 
 	// 三态状态机对齐 EventWatchdog：started（首检停滞）→ ongoing*（1s 节流）
 	// → recovered（恢复）；目标消失收口为 freeze lost（"恢复"语义不诚实）

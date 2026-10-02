@@ -257,3 +257,106 @@ qewt-tauri-lab.exe --cdp-port 9226 --uplink TestAggE2E --duration 25000，
 - QJsonArray 无 reserve()（Qt 6.5）；QTextStream Qt5 须 setCodec("UTF-8")
 - E2E 场景 B（electron-lab 纯 CDP）为可选项，其 CDP 数据通路与混合会话完全
   一致（S2 §7.3 已单独验证），本轮裁剪跳过
+
+## 10. Linux 探针适配交付记录（2026-10-02，v6.4.0）
+
+里程碑 #8：Scout 三探针 Linux 全可用 + CI ubuntu 双矩阵门禁。四阶段推进
+（L1 core 调用栈 → L2 /proc 进程/CPU → L3 X11 冻结 → L4 收口），每阶段
+可编译可验证、双端推送。
+
+### 10.1 L1：StackCapture Linux 化（src/event/StackCapture.cpp）
+
+- `#elif defined(__linux__)`：glibc `backtrace()`（execinfo.h，≤32 帧同 kMaxFrames）
+  + `dladdr()` 解析 Dl_info.dli_fbase/dli_fname
+- moduleName(void* base) 缓存语义对齐 Windows 版 HMODULE 缓存（mutex +
+  unordered_map，告警风暴 32 帧×N 条/s 降本）；basename 取 '/' 后段，
+  空格替换 '_'（日志 key=value 单 token 完整），UTF-8 原样保留
+- offset -= fbase：RVA 口径与 Windows 版一致（addr2line 可直接归因）
+- src/CMakeLists.txt：UNIX 下链接 `${CMAKE_DL_LIBS}`——glibc 2.34 前 dl* 符号
+  在独立 libdl（麒麟 V10 glibc 2.28 等国产环境），该变量在无需显式 dl 的平台为空，跨发行版安全
+- 其余平台保持空 stub（`#else` 兜底）
+
+### 10.2 L2：TargetResolver / CpuSampler /proc 化（examples/scout/）
+
+- TargetResolver.h `#elif defined(Q_OS_UNIX)`：QDir("/proc") 数字目录枚举；
+  探活 = `/proc/<pid>` 存在性；comm 读 `/proc/<pid>/comm`（注明内核 15 字符
+  截断边界——按 comm 匹配目标时截断段不影响前缀匹配场景）；
+  `/proc/<pid>/stat` 解析铁律 = comm 字段可含空格与 `)`，必须
+  `lastIndexOf(')')` 锚定后再切字段（`')'` 后下标 11/12 = utime/stime）
+- descendantPids：单轮 ppid 建图 + BFS 3 层去重，与 Windows 版语义一致
+- CpuSampler：`cpuTimeMsOf` = (utime+stime) tick × `1000.0 / sysconf(_SC_CLK_TCK)`；
+  差分/迟滞（连续 4 拍收口）/episode/`cpuSpin type=99 source=scout` 日志行
+  逐字对齐 Windows 版；成员按平台分支（m_lastCpuMs double vs m_lastTotal100ns qint64）
+
+### 10.3 L3：WindowFreezeProber X11 化（examples/scout/WindowFreezeProber.cpp）
+
+- 探活协议：`_NET_WM_PING` ClientMessage 直接发目标窗口（propagate=False、
+  event_mask=0 → 送达创建该窗口的 client，与 WM 探测同路径）；Qt/GTK 应用
+  逐字段 echo 回 root（Qt 源码 `xev = *event; xev.window = root;` 数据不重写），
+  探针 `XSelectInput(root, StructureNotifyMask)` 收副本——有无 WM 均成立。
+  掩码位取证实录：Qt xcb 回发 event_mask=StructureNotify|SubstructureRedirect
+  （qxcbwindow.cpp handleClientMessageEvent，整包 echo 仅改 window=root），
+  探针须选 StructureNotifyMask（1L<<17）才有交集——误选 SubstructureNotifyMask
+  （1L<<18）则 pong 永远收不到，恢复态判定失效（Run 20 实证：started 可判
+  而 ongoing 无限拉长）；SubstructureRedirect 为 WM 独占掩码不可选
+- token 防串扰：`g_pingToken` 原子计数（getpid() 作高位基座），逐拍 +1 防
+  上一拍迟到 pong 污染本拍判定；匹配 message_type+format==32+token 三条件
+- 窗口枚举：`_NET_CLIENT_LIST`（EWMH，有 WM 时权威）∪ XQueryTree root 直接
+  子窗口（Xvfb 等无 WM 兜底），`_NET_WM_PID` 过滤（fmt=32 → long 数组，
+  LP64 每元素 8 字节——size_t 混淆即读错）
+- 三态状态机逐字复制 Windows 版（started/ongoing 1s 节流/recovered/lost +
+  stalledMs 阈值下界口径）；XOpenDisplay 失败（Wayland native/无头）WARN 降级
+  空转，CPU/CDP 探针不受影响
+- CMake 接线：UNIX 下 `find_package(X11 QUIET)`，TARGET 存在才定义
+  `QEWT_SCOUT_X11=1` 并链接 X11::X11，否则 message(STATUS) 禁用不阻断
+
+### 10.4 CI linux-smoke job（.github/workflows/regression.yml）
+
+- 双矩阵：qt5152-gcc（5.15.2/gcc_64）+ qt653-gcc（6.5.3/gcc_64）
+- apt 依赖一次配齐：libgl1-mesa-dev（Qt5Gui 配置期 gl.h 硬依赖）+
+  xcb 平台插件运行依赖全家桶（xkbcommon-x11/icccm/image/keysyms/rand/
+  render-util/shape/xinerama/xkb/x11-xcb）+ **libxcb-cursor0（Qt 6.5 xcb
+  插件硬依赖，QTBUG-110726）**
+- e2e：basic_demo `--spin` 验证靶——cpu 步（`--cpu-threshold 95` 断言
+  cpuSpin 行）；freeze 步（`--threshold 2000` 断言 started+recovered）。
+  **关键结构约束：靶与 scout 必须同一 X server**——分开的 xvfb-run 是两个
+  独立 display，_NET_WM_PING 跨 server 不可达；用单个 xvfb-run 包裹双进程
+- 运行期：`LD_LIBRARY_PATH` 指向 aqt 包内 lib（随包 libicu* 等 soname 缺代
+  兜底）；Smoke 前置 ldd 'not found' 检查
+- 取证闭环（对齐 Windows job 先例）：configure.log/build.log/smoke.log/scout.log
+  失败时 tail 落 GITHUB_STEP_SUMMARY + ::error:: 注解（匿名可读，不依赖登录
+  拉日志）；Report configure errors 在 build.log 已存在时跳过（失败发生在
+  configure 之后，避免误归因）
+
+### 10.5 取证排障实录（CI 取证装置首轮实战）
+
+- Run 11/12（L1/L2）：注解仅 "Process completed with exit code 1"，
+  #step:7 "build.log missing" 曾被误读为 Smoke 失败——实为 Report build
+  errors 步的从属注解；真失败点 = **Configure exit 1**（gl.h 缺失高嫌疑）
+- Run 12+（68e7404 取证补全后）：注解给出完整链——Build 步
+  `DataExporter.cpp:458:71: conversion from 'const int64_t' to 'const QVariant'
+  is ambiguous` + gmake Error 链
+- 根因：Linux LP64 下 int64_t = long，QVariant 的 int/qlonglong 两个整数
+  构造器打平；MSVC 下 int64_t = long long 精确匹配，故四矩阵本地回归从未
+  暴露——**跨平台首次 CI 编译即抓到 Windows 隐蔽缺陷**，门禁价值实证
+- 修复：`static_cast<qlonglong>(period.periodMs)`（对齐同文件 frames 段先例；
+  全文件唯一歧义点，其余绑定值均 int/QVariant）；MSVC + MinGW 8.1（GCC 同族）
+  双编译器本地验证
+
+### 10.6 质量门禁
+
+- CI：linux-smoke 双矩阵（build + xvfb 冒烟 + cpuSpin e2e + freeze 三态 e2e）
+  与 windows smoke 双矩阵全绿
+- 本地四矩阵回归（scripts/run_regression.ps1 快速档）16/16 PASS
+  （build/smoke/unit 96 checks/benchmark × qt5.15.2/6.5.3 × MSVC/MinGW）
+- static-check 0 findings（cppcheck 2.22.0）
+- Windows 零扰动：L1/L2/L3 各阶段后 MSVC 构建全绿，探针行为无变化
+
+### 10.7 已知边界
+
+- Wayland native 应用：X11 协议不可达，冻结探针诚实降级（CPU/CDP 不受影响）；
+  XWayland 兼容层下与 X11 一致
+- comm 15 字符截断：长进程名按 comm 精确匹配可能 miss（`--pid` 模式不受影响）
+- 探针侧无风暴抑制（环形 4096 吸收 + 阈值放宽，同 S2 §7 边界）
+- CDP 长任务探针（T2）Linux 同样适用（QNetworkAccessManager + QWebSocket
+  均跨平台），本轮未单独新增 Linux e2e 步（Chromium 靶依赖较重，后续按需补）
