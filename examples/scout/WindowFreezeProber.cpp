@@ -292,6 +292,8 @@ void WindowFreezeProber::stop()
 void WindowFreezeProber::run()
 {
 	m_running = true;
+	QElapsedTimer clock;	// 局部名 shadow POSIX ::clock()——合法且仅本段作用域
+	clock.start();
 	Display *dpy = XOpenDisplay(nullptr);
 	if (dpy == nullptr) {
 		// Wayland native / 无 X display：外部探针无等价协议，诚实降级
