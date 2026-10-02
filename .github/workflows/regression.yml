@@ -146,6 +146,9 @@ jobs:
           - name: qt5152-gcc
             qtVersion: '5.15.2'
             qtArch: gcc_64
+          - name: qt653-gcc
+            qtVersion: '6.5.3'
+            qtArch: gcc_64
 
     steps:
       - uses: actions/checkout@v4
@@ -159,7 +162,7 @@ jobs:
           sudo apt-get install -y libx11-dev xvfb libgl1-mesa-dev libxkbcommon-x11-0 \
             libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
             libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 \
-            libx11-xcb1
+            libx11-xcb1 libxcb-cursor0
 
       - name: Install Qt (${{ matrix.qtVersion }})
         run: |
