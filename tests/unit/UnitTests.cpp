@@ -15,6 +15,8 @@
 #include "QEWT.h"
 
 #include "AlarmSuppressor.h"
+#include "ProbeLogic.h"
+#include "RadarConfig.h"
 #include "WatchConfig.h"
 #include "WatchRecordStore.h"
 
@@ -24,6 +26,7 @@
 #include <QDir>
 #include <QFile>
 #include <QSettings>
+#include <QTemporaryDir>
 
 #include <string>
 #include <vector>
@@ -386,6 +389,174 @@ void testWatchConfigIni()
 	QFile::remove(path);
 }
 
+// ============ F. Scout 探针纯逻辑（ProbeLogic，docs/34 R2）============
+
+using namespace qt_event_watcher::ProbeLogic;
+
+void testReceiverOf()
+{
+	// QEWT 断言走 std::ostream，QString 统一 toStdString 比较
+	QEWT_CHECK_EQ(receiverOf(QStringLiteral("app.exe"), 42).toStdString(),
+				  std::string("app.exe@42"));
+	QEWT_CHECK_EQ(receiverOf(QString(), 42).toStdString(), std::string("pid:42"));
+	QEWT_CHECK_EQ(receiverOf(QStringLiteral(""), 7).toStdString(), std::string("pid:7"));
+}
+
+void testExcluded()
+{
+	const QStringList patterns{ QStringLiteral("RtkUWP"), QStringLiteral("Search") };
+	QEWT_CHECK(excluded(QStringLiteral("RtkUWP.exe"), patterns));		// 子串命中
+	QEWT_CHECK(excluded(QStringLiteral("searchhost.exe"), patterns));	// 大小写不敏感
+	QEWT_CHECK(!excluded(QStringLiteral("basic_demo.exe"), patterns));
+	QEWT_CHECK(!excluded(QStringLiteral("anything"), QStringList()));	// 空表不命中
+	QEWT_CHECK(!excluded(QStringLiteral("x"), QStringList{ QString() }));	// 空 pattern 跳过
+}
+
+void testFreezeTrackerStartedAndOngoing()
+{
+	FreezeTracker t(2000);
+	// idle + 未卡 → None
+	QEWT_CHECK(t.onTick(false, 0, [] { return true; }).kind == FreezeEvent::None);
+	// idle + 卡 → Started，stalledMs=阈值下界（外部探针诚实语义）
+	const auto ev1 = t.onTick(true, 100, [] { return true; });
+	QEWT_CHECK(ev1.kind == FreezeEvent::Started);
+	QEWT_CHECK_EQ(ev1.stalledMs, qint64(2000));
+	// 卡中 1s 内 → None（ongoing 节流）
+	QEWT_CHECK(t.onTick(true, 600, [] { return true; }).kind == FreezeEvent::None);
+	// 卡中 >=1s → Ongoing，elapsed=startMs→now 累计
+	const auto ev3 = t.onTick(true, 1101, [] { return true; });
+	QEWT_CHECK(ev3.kind == FreezeEvent::Ongoing);
+	QEWT_CHECK_EQ(ev3.totalMs, qint64(1001));
+}
+
+void testFreezeTrackerRecoveredAndLost()
+{
+	FreezeTracker t(2000);
+	(void)t.onTick(true, 100, [] { return true; });		// Started
+	// !hung + 活 → Recovered，totalMs=startMs→now
+	const auto ev = t.onTick(false, 1500, [] { return true; });
+	QEWT_CHECK(ev.kind == FreezeEvent::Recovered);
+	QEWT_CHECK_EQ(ev.totalMs, qint64(1400));
+	// 恢复后再卡 → 新 episode Started
+	QEWT_CHECK(t.onTick(true, 2000, [] { return true; }).kind == FreezeEvent::Started);
+	// !hung + 死（V8 消亡竞态语义：探活"成功"可能撞垂死窗口）→ Lost 绝不假 recovered
+	QEWT_CHECK(t.onTick(false, 3000, [] { return false; }).kind == FreezeEvent::Lost);
+}
+
+void testFreezeTrackerTargetGone()
+{
+	FreezeTracker t(2000);
+	// 未冻结时目标消失 → None（无可收口）
+	QEWT_CHECK(t.onTargetGone().kind == FreezeEvent::None);
+	(void)t.onTick(true, 100, [] { return true; });		// Started
+	// 冻结中目标消失（雷达在册集增量管理）→ Lost
+	QEWT_CHECK(t.onTargetGone().kind == FreezeEvent::Lost);
+	// Lost 后目标回归且卡 → 重新 Started（新 episode）
+	QEWT_CHECK(t.onTick(true, 500, [] { return true; }).kind == FreezeEvent::Started);
+}
+
+void testCpuEpisodeHysteresis()
+{
+	CpuEpisodeTracker t(95, 3);
+	// 未达 runsNeeded → None
+	QEWT_CHECK(t.onTick(97.0).kind == CpuEvent::None);
+	QEWT_CHECK(t.onTick(96.0).kind == CpuEvent::None);
+	// 第 3 拍 → Spin（episode 内至多一条），cpuPct 承载该拍实测值
+	const auto ev = t.onTick(95.0);
+	QEWT_CHECK(ev.kind == CpuEvent::Spin);
+	QEWT_CHECK(ev.cpuPct >= 95.0);
+	// 持续忙 → 不再发（emitted 锁存）
+	QEWT_CHECK(t.onTick(99.0).kind == CpuEvent::None);
+	// 单拍噪声回落不收口（<settleRuns）→ 回忙仍不发
+	QEWT_CHECK(t.onTick(10.0).kind == CpuEvent::None);
+	QEWT_CHECK(t.onTick(99.0).kind == CpuEvent::None);
+	// 连续 4 拍低于阈值 → episode 收口
+	t.onTick(10.0);
+	t.onTick(10.0);
+	t.onTick(10.0);
+	t.onTick(10.0);
+	// 收口后重新起算：runsNeeded=3 拍后可再发
+	QEWT_CHECK(t.onTick(99.0).kind == CpuEvent::None);
+	QEWT_CHECK(t.onTick(99.0).kind == CpuEvent::None);
+	QEWT_CHECK(t.onTick(99.0).kind == CpuEvent::Spin);
+}
+
+void testCpuEpisodeResetAndRunsGuard()
+{
+	CpuEpisodeTracker t(90, 0);		// runsNeeded 非法 → 1（单拍即发）
+	QEWT_CHECK(t.onTick(95.0).kind == CpuEvent::Spin);
+	// reset：目标消失观测断点 → 立即可再发
+	t.reset();
+	QEWT_CHECK(t.onTick(95.0).kind == CpuEvent::Spin);
+	// 刚好等于阈值算超阈（>= 语义）
+	CpuEpisodeTracker t2(100, 1);
+	QEWT_CHECK(t2.onTick(100.0).kind == CpuEvent::Spin);
+	QEWT_CHECK(t2.onTick(99.9).kind == CpuEvent::None);
+}
+
+// ============ G. RadarConfig 解析（Scout V1 R3b） ============
+
+void writeRadarIni(const QString &path, const char *content)
+{
+	QFile f(path);
+	QEWT_CHECK(f.open(QIODevice::WriteOnly | QIODevice::Text));
+	f.write(content);
+}
+
+void testRadarConfigParse()
+{
+	QTemporaryDir dir;
+	QEWT_CHECK(dir.isValid());
+	const QString path = dir.filePath("radar.ini");
+	writeRadarIni(path,
+		"[other]\nthresholdMs=99\n"		// 非 [radar] 节：不收
+		"[radar]\n"
+		"exclude=RtkUWP, SearchHost ; 行内注释剥离\n"
+		"thresholdMs=1800\n"
+		"intervalMs=400\n"
+		"cpuThreshold=90\n"
+		"cpuRuns=2\n"
+		"; 全行注释\n"
+		"# 井号注释\n"
+		"garbage line without eq\n");	// 无 '=' 行跳过
+	RadarConfig cfg;
+	QEWT_CHECK(loadRadarConfig(path, cfg));
+	QEWT_CHECK_EQ(cfg.thresholdMs, 1800);
+	QEWT_CHECK_EQ(cfg.intervalMs, 400);
+	QEWT_CHECK_EQ(cfg.cpuThreshold, 90);
+	QEWT_CHECK_EQ(cfg.cpuRuns, 2);
+	QEWT_CHECK(cfg.excludeSet);
+	QEWT_CHECK_EQ(cfg.exclude.size(), std::size_t{2});
+	QEWT_CHECK(cfg.exclude.at(0) == QStringLiteral("RtkUWP"));
+	QEWT_CHECK(cfg.exclude.at(1) == QStringLiteral("SearchHost"));
+	QEWT_CHECK(cfg.hasAny());
+}
+
+void testRadarConfigPartialAndInvalid()
+{
+	QTemporaryDir dir;
+	const QString path = dir.filePath("radar.ini");
+	// 非法/非正数字不写入；exclude 键出现即设置（空值 = 显式清空语义）
+	writeRadarIni(path,
+		"[radar]\nthresholdMs=-5\nintervalMs=0\ncpuRuns=abc\nexclude=\n");
+	RadarConfig cfg;
+	QEWT_CHECK(loadRadarConfig(path, cfg));
+	QEWT_CHECK_EQ(cfg.thresholdMs, 0);
+	QEWT_CHECK_EQ(cfg.intervalMs, 0);
+	QEWT_CHECK_EQ(cfg.cpuThreshold, 0);
+	QEWT_CHECK_EQ(cfg.cpuRuns, 0);
+	QEWT_CHECK(cfg.excludeSet);
+	QEWT_CHECK(cfg.exclude.empty());
+}
+
+void testRadarConfigMissingFile()
+{
+	RadarConfig cfg;
+	QEWT_CHECK(!loadRadarConfig(
+		QStringLiteral("Z:/definitely/not/here.ini"), cfg));
+	QEWT_CHECK(!cfg.hasAny());
+}
+
 const qewt::Case kCases[] = {
 	{"parseFields/empty", testParseFieldsEmpty},
 	{"parseFields/basic", testParseFieldsBasic},
@@ -412,6 +583,16 @@ const qewt::Case kCases[] = {
 	{"watchconfig/env-hex-rejected", testWatchConfigEnvHexRejected},
 	{"watchconfig/env-invalid-fallback", testWatchConfigEnvInvalidFallback},
 	{"watchconfig/ini", testWatchConfigIni},
+	{"scout/receiver-of", testReceiverOf},
+	{"scout/excluded", testExcluded},
+	{"scout/freeze-started-ongoing", testFreezeTrackerStartedAndOngoing},
+	{"scout/freeze-recovered-lost", testFreezeTrackerRecoveredAndLost},
+	{"scout/freeze-target-gone", testFreezeTrackerTargetGone},
+	{"scout/cpu-episode-hysteresis", testCpuEpisodeHysteresis},
+	{"scout/cpu-episode-reset-guard", testCpuEpisodeResetAndRunsGuard},
+	{"scout/radar-config-parse", testRadarConfigParse},
+	{"scout/radar-config-partial-invalid", testRadarConfigPartialAndInvalid},
+	{"scout/radar-config-missing", testRadarConfigMissingFile},
 };
 
 } // namespace

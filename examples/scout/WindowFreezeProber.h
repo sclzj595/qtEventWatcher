@@ -13,6 +13,8 @@
 #include <QString>
 #include <atomic>
 
+#include "ScoutAlarmEmitter.h"
+
 namespace qt_event_watcher {
 
 class WindowFreezeProber : public QThread
@@ -28,6 +30,7 @@ protected:
 	void run() override;
 
 private:
+	ScoutAlarmEmitter m_alarm;		///< 告警风暴抑制门（docs/34 R3c）
 #ifdef Q_OS_WIN
 	/// 枚举目标 pid 集的可见顶层窗口逐个探活；命中 hung 窗口返回 true 并
 	/// 填 procName（窗口所属进程名，作 receiver 字段）

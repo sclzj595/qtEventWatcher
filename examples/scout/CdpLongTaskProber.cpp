@@ -230,8 +230,10 @@ void CdpLongTaskProber::emitLongTask(int durMs)
 {
 	const std::string u = m_pageUrl.toStdString();
 	// 行格式对齐自监控 slow event（hydrateRecord 通用解析可用）；
-	// event=cdpLongTask type=98 source=scout-cdp 诚实标注来源
-	QEW_LOG_WARN("[EventWatcher] slow event receiver={:s} object={:s} "
+	// event=cdpLongTask type=98 source=scout-cdp 诚实标注来源。
+	// 风暴抑制：页面忙转风暴时 longtask 高频连发，同 key 1s 窗口首条必出
+	m_alarm.emitAlarm("cdp:" + u,
+				 "[EventWatcher] slow event receiver={:s} object={:s} "
 				 "event=cdpLongTask type=98 depth=0 costMs={} "
 				 "exclusiveCostMs=0.000 curThread=0x0 recvThread=0x0 "
 				 "match=true thresholdMs={} source=scout-cdp url={:s}",

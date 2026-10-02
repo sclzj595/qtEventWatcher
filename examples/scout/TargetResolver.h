@@ -126,6 +126,8 @@ inline QString processNameOf(qint64 pid)
 
 #elif defined(Q_OS_UNIX)	// Linux：/proc 遍历（API 语义对齐 Windows 版，调用方零感知）
 
+#include <unistd.h>
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -245,6 +247,33 @@ inline QList<qint64> descendantPids(const QList<qint64> &roots, int maxDepth = 3
 inline QString processNameOf(qint64 pid)
 {
 	return commOf(pid);
+}
+
+/// /proc/<pid>/stat field 14+15（utime+stime，tick）→ 生命周期累计 CPU 毫秒
+/// （V1 R3a 雷达 per-target CPU 采样用；与 CpuSampler.cpp 同锚定口径）。
+/// comm（field 2）可含空格与 ')'——以最后一个 ')' 锚定 comm 结束后再切字段，
+/// ')' 后序列：state(3) ppid(4) ... utime(14)→下标11 stime(15)→下标12。
+inline bool cpuTimeMsOf(qint64 pid, double *outMs)
+{
+	QFile f(QStringLiteral("/proc/%1/stat").arg(pid));
+	if (!f.open(QIODevice::ReadOnly))
+		return false;
+	const QString data = QString::fromUtf8(f.readAll());
+	const int close = data.lastIndexOf(QLatin1Char(')'));
+	if (close < 0 || close + 2 >= data.size())
+		return false;
+	const QStringList fields = data.mid(close + 2).split(QLatin1Char(' '));
+	if (fields.size() < 13)
+		return false;
+	bool okU = false;
+	bool okS = false;
+	const double utime = fields.at(11).toDouble(&okU);
+	const double stime = fields.at(12).toDouble(&okS);
+	if (!okU || !okS)
+		return false;
+	// CLK_TCK 每次调用取（inline 头文件无静态可变状态；成本一次 sysconf 可忽略）
+	*outMs = (utime + stime) * (1000.0 / double(sysconf(_SC_CLK_TCK)));
+	return true;
 }
 
 } // namespace TargetResolver

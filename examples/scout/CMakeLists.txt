@@ -7,6 +7,9 @@
 
 set(SCOUT_SOURCES
     main.cpp
+    ProbeLogic.h
+    RadarConfig.h
+    ScoutAlarmEmitter.h
     WindowFreezeProber.cpp
     WindowFreezeProber.h
     CpuSampler.cpp
@@ -28,6 +31,7 @@ target_include_directories(scout
         # 白盒（V4 C1/D2 收紧后的 PRIVATE 面；探针复用配置与上行链路，
         # 与 tests/examples 白盒口径一致）
         ${PROJECT_SOURCE_DIR}/src/config
+        ${PROJECT_SOURCE_DIR}/src/event
         ${PROJECT_SOURCE_DIR}/src/ipc
 )
 

@@ -12,6 +12,9 @@
 #include <QString>
 #include <QTimer>
 
+#include "ProbeLogic.h"
+#include "ScoutAlarmEmitter.h"
+
 namespace qt_event_watcher {
 
 class CpuSampler : public QObject
@@ -31,8 +34,8 @@ private:
 
 	QString m_targetName;
 	qint64 m_targetPid = 0;
-	int m_thresholdPct = 0;
-	int m_runsNeeded = 0;
+	ProbeLogic::CpuEpisodeTracker m_episode;		///< episode 迟滞纯逻辑（docs/34 R1）
+	ScoutAlarmEmitter m_alarm;						///< 告警风暴抑制门（docs/34 R3c）
 	QTimer m_timer;
 	QElapsedTimer m_sampleClock;					///< 相邻两拍间隔（cpu% 分母）
 #if defined(Q_OS_WIN)
@@ -40,9 +43,6 @@ private:
 #elif defined(Q_OS_UNIX)
 	QHash<qint64, double> m_lastCpuMs;				///< pid → 上拍 utime+stime 累计（ms；/proc stat tick 换算）
 #endif
-	int m_streak = 0;								///< 连续超阈值拍数
-	int m_streakDown = 0;							///< 连续低于阈值拍数（episode 迟滞收口）
-	bool m_emitted = false;							///< 本 episode 已发告警（防刷屏）
 };
 
 } // namespace qt_event_watcher

@@ -43,6 +43,8 @@ target_include_directories(UnitTests
         ${PROJECT_SOURCE_DIR}/src/config
         ${PROJECT_SOURCE_DIR}/src/event
         ${PROJECT_SOURCE_DIR}/src/logging
+        # F 段 Scout 探针纯逻辑（ProbeLogic.h header-only，docs/34 R2）
+        ${PROJECT_SOURCE_DIR}/examples/scout
 )
 
 add_test(NAME UnitTests COMMAND UnitTests)

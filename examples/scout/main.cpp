@@ -19,6 +19,7 @@
 //         [--uplink <server>] [--duration ms]     # T3 全机雷达（免 pid/name）
 
 #include "CpuSampler.h"
+#include "RadarConfig.h"
 #include "RadarScheduler.h"
 #include "UplinkClient.h"
 #include "WatchConfig.h"
@@ -49,8 +50,9 @@ void printUsage()
 		"          [--uplink <server>] [--flush-ms ms=200] [--duration ms=0(stay)]\n"
 		"       scout --cdp-port <port> [--cdp-target <substr>] [--cdp-threshold ms=50]\n"
 		"          [--uplink <server>] [--duration ms]\n"
-		"       scout --radar [--radar-exclude <name1,name2>] [--threshold ms=2000]\n"
-		"          [--interval ms=250] [--uplink <server>] [--duration ms]\n"
+		"       scout --radar [--radar-exclude <name1,name2>] [--radar-config <file>]\n"
+		"          [--threshold ms=2000] [--interval ms=250] [--uplink <server>]\n"
+		"          [--duration ms]\n"
 		"examples:\n"
 		"  scout --name basic_demo.exe --threshold 2000 --duration 15000\n"
 		"  scout --pid 12345 --uplink QtEventWatcherAggregator\n"
@@ -81,6 +83,13 @@ int main(int argc, char *argv[])
 	QString cdpTarget;				// url/title 子串过滤（空 = 首个 page）
 	bool radarMode = false;			// V8 T3：全机雷达（免 pid/name）
 	QString radarExclude;			// 逗号分隔进程名子串排除表
+	QString radarConfigFile;		// V1 R3b：雷达配置文件（热加载真源）
+	// 显式 CLI 位（V1 R3b 优先级合成：默认 < 配置文件 < 显式 CLI）
+	bool thresholdSet = false;
+	bool intervalSet = false;
+	bool cpuThresholdSet = false;
+	bool cpuRunsSet = false;
+	bool radarExcludeSet = false;
 
 	for (int i = 1; i < argc; ++i) {
 		const QByteArray arg(argv[i]);
@@ -94,12 +103,16 @@ int main(int argc, char *argv[])
 			name = QString::fromLocal8Bit(next());	++i; consumed = true;
 		} else if (arg == "--threshold" && !next().isEmpty()) {
 			thresholdMs = next().toInt();		++i; consumed = true;
+			thresholdSet = true;
 		} else if (arg == "--interval" && !next().isEmpty()) {
 			intervalMs = next().toInt();		++i; consumed = true;
+			intervalSet = true;
 		} else if (arg == "--cpu-threshold" && !next().isEmpty()) {
 			cpuThresholdPct = next().toInt();	++i; consumed = true;
+			cpuThresholdSet = true;
 		} else if (arg == "--cpu-runs" && !next().isEmpty()) {
 			cpuRuns = next().toInt();			++i; consumed = true;
+			cpuRunsSet = true;
 		} else if (arg == "--cdp-port" && !next().isEmpty()) {
 			cdpPort = next().toInt();			++i; consumed = true;
 		} else if (arg == "--cdp-threshold" && !next().isEmpty()) {
@@ -110,6 +123,9 @@ int main(int argc, char *argv[])
 			radarMode = true;					consumed = true;
 		} else if (arg == "--radar-exclude" && !next().isEmpty()) {
 			radarExclude = QString::fromLocal8Bit(next()); ++i; consumed = true;
+			radarExcludeSet = true;
+		} else if (arg == "--radar-config" && !next().isEmpty()) {
+			radarConfigFile = QString::fromLocal8Bit(next()); ++i; consumed = true;
 		} else if (arg == "--uplink" && !next().isEmpty()) {
 			uplink = QString::fromLocal8Bit(next()); ++i; consumed = true;
 		} else if (arg == "--flush-ms" && !next().isEmpty()) {
@@ -121,6 +137,27 @@ int main(int argc, char *argv[])
 			std::printf("unknown or incomplete argument: %s\n", arg.constData());
 			printUsage();
 			return 2;
+		}
+	}
+
+	// 雷达配置文件（V1 R3b）：优先级 默认 < 配置文件 < 显式 CLI；
+	// 文件不可读时告警并继续（默认值兜底）
+	if (radarMode && !radarConfigFile.isEmpty()) {
+		RadarConfig cfg;
+		if (loadRadarConfig(radarConfigFile, cfg)) {
+			if (!thresholdSet && cfg.thresholdMs > 0)
+				thresholdMs = cfg.thresholdMs;
+			if (!intervalSet && cfg.intervalMs > 0)
+				intervalMs = cfg.intervalMs;
+			if (!cpuThresholdSet && cfg.cpuThreshold > 0)
+				cpuThresholdPct = cfg.cpuThreshold;
+			if (!cpuRunsSet && cfg.cpuRuns > 0)
+				cpuRuns = cfg.cpuRuns;
+			if (!radarExcludeSet && cfg.excludeSet)
+				radarExclude = cfg.exclude.join(QLatin1Char(','));
+		} else {
+			std::printf("radar config not readable: %s\n",
+						radarConfigFile.toLocal8Bit().constData());
 		}
 	}
 
@@ -163,7 +200,9 @@ int main(int argc, char *argv[])
 	if (radarMode) {
 		radarScheduler = std::make_unique<RadarScheduler>(
 			thresholdMs, intervalMs, QCoreApplication::applicationPid(),
-			radarExclude.split(QLatin1Char(','), Qt::SkipEmptyParts));
+			radarExclude.split(QLatin1Char(','), Qt::SkipEmptyParts),
+			cpuThresholdPct, cpuRuns);
+		radarScheduler->setConfigFile(radarConfigFile);	// V1 R3b 热加载
 		radarScheduler->start(QThread::LowPriority);
 	} else if (hasTarget) {
 		freezeProber = std::make_unique<WindowFreezeProber>(
@@ -193,10 +232,10 @@ int main(int argc, char *argv[])
 						  : name.toStdString());
 	QEW_LOG_INFO("[Scout] watching target={:s} pid={} thresholdMs={} intervalMs={} "
 				 "cpuThresholdPct={} cpuRuns={} cdpPort={} radar={} radarExclude={:s} "
-				 "uplink={:s}",
+				 "radarConfig={:s} uplink={:s}",
 				 targetDesc, pid, thresholdMs, intervalMs, cpuThresholdPct, cpuRuns,
 				 cdpPort, radarMode ? 1 : 0, radarExclude.toStdString(),
-				 uplink.toStdString());
+				 radarConfigFile.toStdString(), uplink.toStdString());
 
 	// duration > 0：到点自动退出（e2e/巡检模式）；0 = 常驻
 	if (durationMs > 0)

@@ -24,6 +24,8 @@
 #include <QTimer>
 #include <QUrl>
 
+#include "ScoutAlarmEmitter.h"
+
 class QNetworkAccessManager;
 class QWebSocket;
 
@@ -43,6 +45,7 @@ public:
 	void stop();
 
 private:
+	ScoutAlarmEmitter m_alarm;		///< 告警风暴抑制门（docs/34 R3c）
 	void discover();				// HTTP /json/list → 选 page target
 	void connectPage(const QUrl &wsUrl, const QString &pageUrl);
 	void inject();					// Runtime.evaluate 安装 PerformanceObserver

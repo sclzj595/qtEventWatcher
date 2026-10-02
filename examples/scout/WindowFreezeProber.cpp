@@ -1,5 +1,6 @@
 #include "WindowFreezeProber.h"
 
+#include "ProbeLogic.h"
 #include "TargetResolver.h"
 #include "WatchLogMacros.h"
 
@@ -84,11 +85,10 @@ void WindowFreezeProber::run()
 	QElapsedTimer clock;
 	clock.start();
 
-	// 三态状态机对齐 EventWatchdog：started（首检停滞）→ ongoing*（1s 节流）
-	// → recovered（恢复）；目标消失收口为 freeze lost（"恢复"语义不诚实）
-	bool freezing = false;
-	qint64 startMs = 0;
-	qint64 lastOngoingMs = 0;
+	// 三态状态机（纯逻辑 ProbeLogic::FreezeTracker）对齐 EventWatchdog：
+	// started（首检停滞）→ ongoing*（1s 节流）→ recovered（恢复）；
+	// 目标消失收口为 freeze lost（"恢复"语义不诚实）
+	ProbeLogic::FreezeTracker tracker(m_thresholdMs);
 	QString recvName;
 
 	while (m_running) {
@@ -102,31 +102,38 @@ void WindowFreezeProber::run()
 			hung = probeTopWindows(pids, proc);
 
 		const qint64 nowMs = clock.elapsed();
-		if (freezing) {
-			if (pids.isEmpty()) {
-				freezing = false;
-				QEW_LOG_WARN("[FreezeWatch] freeze lost receiver={:s} type=0",
-							 recvName.toStdString());
-			} else if (!hung) {
-				freezing = false;
-				QEW_LOG_WARN("[FreezeWatch] freeze recovered totalMs={} "
-							 "receiver={:s} type=0 inProgress=false",
-							 nowMs - startMs, recvName.toStdString());
-			} else if (nowMs - lastOngoingMs >= 1000) {
-				lastOngoingMs = nowMs;
-				QEW_LOG_WARN("[FreezeWatch] freeze ongoing elapsedMs={} "
-							 "receiver={:s} type=0 inProgress=false",
-							 nowMs - startMs, recvName.toStdString());
-			}
-		} else if (hung) {
-			freezing = true;
-			startMs = nowMs;
-			lastOngoingMs = nowMs;
+		// alive = pid 解析非空（T1 存活代理）；pids 空时 hung 恒 false，
+		// freezing 中走 lost 分支——与原分支序逐语义等价
+		const ProbeLogic::FreezeEvent ev = tracker.onTick(
+			hung, nowMs, [&pids]() { return !pids.isEmpty(); });
+		switch (ev.kind) {
+		case ProbeLogic::FreezeEvent::Started:
 			recvName = proc;
 			// stalledMs 保守取阈值下界：外部探针只能保证"至少已停滞 threshold"
-			QEW_LOG_WARN("[FreezeWatch] freeze started thresholdMs={} stalledMs={} "
+			m_alarm.emitAlarm("freeze:" + recvName.toStdString(),
+						 "[FreezeWatch] freeze started thresholdMs={} stalledMs={} "
 						 "receiver={:s} type=0 inProgress=false",
-						 m_thresholdMs, m_thresholdMs, recvName.toStdString());
+						 m_thresholdMs, ev.stalledMs, recvName.toStdString());
+			break;
+		case ProbeLogic::FreezeEvent::Ongoing:
+			m_alarm.emitAlarm("freeze:" + recvName.toStdString(),
+						 "[FreezeWatch] freeze ongoing elapsedMs={} "
+						 "receiver={:s} type=0 inProgress=false",
+						 ev.totalMs, recvName.toStdString());
+			break;
+		case ProbeLogic::FreezeEvent::Recovered:
+			m_alarm.emitAlarm("freeze:" + recvName.toStdString(),
+						 "[FreezeWatch] freeze recovered totalMs={} "
+						 "receiver={:s} type=0 inProgress=false",
+						 ev.totalMs, recvName.toStdString());
+			break;
+		case ProbeLogic::FreezeEvent::Lost:
+			m_alarm.emitAlarm("freeze:" + recvName.toStdString(),
+						 "[FreezeWatch] freeze lost receiver={:s} type=0",
+						 recvName.toStdString());
+			break;
+		case ProbeLogic::FreezeEvent::None:
+			break;
 		}
 
 		// 分片睡眠保证 stop 响应性（hung 拍 tick 本身可能占满 threshold）
@@ -199,11 +206,10 @@ void WindowFreezeProber::run()
 	// SubstructureRedirect 是 WM 独占掩码不可选；WM 在/不在均成立）
 	XSelectInput(dpy, root, StructureNotifyMask);
 
-	// 三态状态机对齐 EventWatchdog：started（首检停滞）→ ongoing*（1s 节流）
-	// → recovered（恢复）；目标消失收口为 freeze lost（"恢复"语义不诚实）
-	bool freezing = false;
-	qint64 startMs = 0;
-	qint64 lastOngoingMs = 0;
+	// 三态状态机（纯逻辑 ProbeLogic::FreezeTracker）对齐 EventWatchdog：
+	// started（首检停滞）→ ongoing*（1s 节流）→ recovered（恢复）；
+	// 目标消失收口为 freeze lost（"恢复"语义不诚实）
+	ProbeLogic::FreezeTracker tracker(m_thresholdMs);
 	QString recvName;
 
 	while (m_running) {
@@ -230,31 +236,38 @@ void WindowFreezeProber::run()
 		}
 
 		const qint64 nowMs = clock.elapsed();
-		if (freezing) {
-			if (pids.isEmpty()) {
-				freezing = false;
-				QEW_LOG_WARN("[FreezeWatch] freeze lost receiver={:s} type=0",
-							 recvName.toStdString());
-			} else if (!hung) {
-				freezing = false;
-				QEW_LOG_WARN("[FreezeWatch] freeze recovered totalMs={} "
-							 "receiver={:s} type=0 inProgress=false",
-							 nowMs - startMs, recvName.toStdString());
-			} else if (nowMs - lastOngoingMs >= 1000) {
-				lastOngoingMs = nowMs;
-				QEW_LOG_WARN("[FreezeWatch] freeze ongoing elapsedMs={} "
-							 "receiver={:s} type=0 inProgress=false",
-							 nowMs - startMs, recvName.toStdString());
-			}
-		} else if (hung) {
-			freezing = true;
-			startMs = nowMs;
-			lastOngoingMs = nowMs;
+		// alive = pid 解析非空（T1 存活代理）；pids 空时 hung 恒 false，
+		// freezing 中走 lost 分支——与原分支序逐语义等价
+		const ProbeLogic::FreezeEvent ev = tracker.onTick(
+			hung, nowMs, [&pids]() { return !pids.isEmpty(); });
+		switch (ev.kind) {
+		case ProbeLogic::FreezeEvent::Started:
 			recvName = proc;
 			// stalledMs 保守取阈值下界：外部探针只能保证"至少已停滞 threshold"
-			QEW_LOG_WARN("[FreezeWatch] freeze started thresholdMs={} stalledMs={} "
+			m_alarm.emitAlarm("freeze:" + recvName.toStdString(),
+						 "[FreezeWatch] freeze started thresholdMs={} stalledMs={} "
 						 "receiver={:s} type=0 inProgress=false",
-						 m_thresholdMs, m_thresholdMs, recvName.toStdString());
+						 m_thresholdMs, ev.stalledMs, recvName.toStdString());
+			break;
+		case ProbeLogic::FreezeEvent::Ongoing:
+			m_alarm.emitAlarm("freeze:" + recvName.toStdString(),
+						 "[FreezeWatch] freeze ongoing elapsedMs={} "
+						 "receiver={:s} type=0 inProgress=false",
+						 ev.totalMs, recvName.toStdString());
+			break;
+		case ProbeLogic::FreezeEvent::Recovered:
+			m_alarm.emitAlarm("freeze:" + recvName.toStdString(),
+						 "[FreezeWatch] freeze recovered totalMs={} "
+						 "receiver={:s} type=0 inProgress=false",
+						 ev.totalMs, recvName.toStdString());
+			break;
+		case ProbeLogic::FreezeEvent::Lost:
+			m_alarm.emitAlarm("freeze:" + recvName.toStdString(),
+						 "[FreezeWatch] freeze lost receiver={:s} type=0",
+						 recvName.toStdString());
+			break;
+		case ProbeLogic::FreezeEvent::None:
+			break;
 		}
 
 		// 分片睡眠保证 stop 响应性（hung 拍 tick 本身可能占满 threshold）

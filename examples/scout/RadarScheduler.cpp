@@ -1,15 +1,20 @@
 #include "RadarScheduler.h"
 
+#include "ProbeLogic.h"
+#include "RadarConfig.h"
 #include "RadarDiscover.h"
 #include "WatchLogMacros.h"
 
+#include <QDateTime>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QHash>
 #include <QSet>
 #include <QString>
 
 #include <algorithm>
+#include <limits>
 
 #ifdef Q_OS_WIN
 
@@ -22,32 +27,12 @@ namespace qt_event_watcher {
 
 namespace {
 
-/// per-target 三态状态机（started → ongoing*(1s 节流) → recovered/lost）
-struct TargetState
+/// 雷达在册目标：冻结状态机（纯逻辑见 ProbeLogic.h）+ 实例级 receiver 名
+struct RadarTarget
 {
-	bool freezing = false;
-	qint64 startMs = 0;
-	qint64 lastOngoingMs = 0;
+	ProbeLogic::FreezeTracker tracker{ 0 };
 	QString recvName;
 };
-
-/// receiver 组名：name@pid 实例级唯一（freeze 三态配对按 receiver 键合，
-/// 同名多开须互不串扰；无名兜底 pid:N）
-QString receiverOf(const QString &name, qint64 pid)
-{
-	return name.isEmpty() ? QStringLiteral("pid:%1").arg(pid)
-						  : QStringLiteral("%1@%2").arg(name).arg(pid);
-}
-
-/// 排除表命中：进程名子串大小写不敏感匹配
-bool excluded(const QString &name, const QStringList &patterns)
-{
-	for (const QString &p : patterns) {
-		if (!p.isEmpty() && name.contains(p, Qt::CaseInsensitive))
-			return true;
-	}
-	return false;
-}
 
 /// 进程真实存活判定：OpenProcess 对"已终止但句柄未释放"的进程对象仍成功
 /// （探活"成功"撞 kill 竞态时正是这种状态），须等内核对象判信号态——
@@ -67,12 +52,15 @@ bool aliveOf(qint64 pid)
 } // namespace
 
 RadarScheduler::RadarScheduler(int thresholdMs, int intervalMs, qint64 selfPid,
-							   const QStringList &excludeNames, QObject *parent)
+							   const QStringList &excludeNames,
+							   int cpuThresholdPct, int cpuRuns, QObject *parent)
 	: QThread(parent)
 	, m_thresholdMs(thresholdMs)
 	, m_intervalMs(intervalMs)
 	, m_selfPid(selfPid)
 	, m_excludeNames(excludeNames)
+	, m_cpuThresholdPct(cpuThresholdPct)
+	, m_cpuRuns(cpuRuns)
 	, m_running(false)
 {
 }
@@ -91,12 +79,58 @@ void RadarScheduler::run()
 	// 进程名缓存：只对新出现 pid 解析（nameMapOf 单次快照建全表），消失项随拍清理
 	QHash<qint64, QString> nameCache;
 
-	// 三态状态机 per-target；目标消失收口 freeze lost（"恢复"语义不诚实）
-	QHash<qint64, TargetState> targets;
+	// 三态状态机 per-target（纯逻辑 ProbeLogic::FreezeTracker）；
+	// 目标消失收口 freeze lost（"恢复"语义不诚实）
+	QHash<qint64, RadarTarget> targets;
+
+	// per-target CPU 启发状态（V1 R3a）：episode 迟滞 + 采样基线
+	QHash<qint64, ProbeLogic::CpuEpisodeTracker> cpuEpisodes;
+	QHash<qint64, qint64> lastTotal100ns;
+
+	// 配置热加载状态（V1 R3b）：mtime 变更即重载；kNoConfigMtime = 未加载哨兵
+	static constexpr qint64 kNoConfigMtime = std::numeric_limits<qint64>::min();
+	qint64 lastConfigMtime = kNoConfigMtime;
+	bool configWarned = false;
 
 	while (m_running) {
 		QElapsedTimer tick;
 		tick.start();
+
+		// 配置热加载（V1 R3b）：mtime 变更即重载（worker 线程独占读，无锁）；
+		// 文件消失/解析失败保持旧配置并告警一次，成功重载后复位
+		if (!m_configFile.isEmpty()) {
+			const QFileInfo cf(m_configFile);
+			const qint64 cm
+				= cf.exists() ? cf.lastModified().toMSecsSinceEpoch() : -1;
+			if (cm != lastConfigMtime) {
+				lastConfigMtime = cm;
+				RadarConfig cfg;
+				if (cm >= 0 && loadRadarConfig(m_configFile, cfg)
+					&& cfg.hasAny()) {
+					configWarned = false;
+					if (cfg.thresholdMs > 0)
+						m_thresholdMs = cfg.thresholdMs;
+					if (cfg.intervalMs > 0)
+						m_intervalMs = cfg.intervalMs;
+					if (cfg.cpuThreshold > 0)
+						m_cpuThresholdPct = cfg.cpuThreshold;
+					if (cfg.cpuRuns > 0)
+						m_cpuRuns = cfg.cpuRuns;
+					if (cfg.excludeSet)
+						m_excludeNames = cfg.exclude;
+					QEW_LOG_INFO("[Scout] radar config reloaded thresholdMs={} "
+								 "intervalMs={} cpuThreshold={} cpuRuns={} exclude={:s}",
+								 m_thresholdMs, m_intervalMs, m_cpuThresholdPct,
+								 m_cpuRuns,
+								 m_excludeNames.join(QLatin1Char(',')).toStdString());
+				} else if (!configWarned) {
+					configWarned = true;
+					QEW_LOG_WARN("[Scout] radar config unavailable/invalid, "
+								 "keeping last: {:s}",
+								 m_configFile.toStdString());
+				}
+			}
+		}
 
 		// 发现：可见顶层窗口 → pid 集 + 句柄归组（跳过自身 pid 双保险）
 		const QList<RadarDiscover::RadarWindow> wins = RadarDiscover::sweepWindows();
@@ -111,17 +145,31 @@ void RadarScheduler::run()
 		QList<qint64> alivePids = alive.values();
 		std::sort(alivePids.begin(), alivePids.end());	// 确定性轮询序
 
-		// 增量管理：消失目标收口 + 名字缓存清理
+		// 增量管理：消失目标收口 + 名字缓存与 CPU 状态清理
 		for (auto it = targets.begin(); it != targets.end();) {
 			if (!alive.contains(it.key())) {
-				if (it.value().freezing) {
-					QEW_LOG_WARN("[FreezeWatch] freeze lost receiver={:s} type=0 radar=1",
+				if (it.value().tracker.onTargetGone().kind
+					== ProbeLogic::FreezeEvent::Lost) {
+					m_alarm.emitAlarm("freeze:" + it.value().recvName.toStdString(),
+								 "[FreezeWatch] freeze lost receiver={:s} type=0 radar=1",
 								 it.value().recvName.toStdString());
 				}
 				it = targets.erase(it);
 			} else {
 				++it;
 			}
+		}
+		for (auto it = cpuEpisodes.begin(); it != cpuEpisodes.end();) {
+			if (!alive.contains(it.key()))
+				it = cpuEpisodes.erase(it);
+			else
+				++it;
+		}
+		for (auto it = lastTotal100ns.begin(); it != lastTotal100ns.end();) {
+			if (!alive.contains(it.key()))
+				it = lastTotal100ns.erase(it);
+			else
+				++it;
 		}
 		for (auto it = nameCache.begin(); it != nameCache.end();) {
 			if (!alive.contains(it.key()))
@@ -146,7 +194,7 @@ void RadarScheduler::run()
 			if (!m_running)
 				break;
 			const QString name = nameCache.value(pid);
-			if (excluded(name, m_excludeNames))
+			if (ProbeLogic::excluded(name, m_excludeNames))
 				continue;
 			bool hung = false;
 			for (qint64 h : byPid.value(pid)) {
@@ -163,37 +211,97 @@ void RadarScheduler::run()
 					break;
 			}
 
-			TargetState &st = targets[pid];
+			RadarTarget &rt = targets[pid];
+			rt.tracker.thresholdMs = m_thresholdMs;	// 阈值跟随成员（热加载铺路）
 			const qint64 nowMs = clock.elapsed();
-			if (st.freezing) {
-				if (!hung) {
-					st.freezing = false;
-					// 探活"成功"可能撞上目标消亡竞态（消息送达瞬间进程被终止，
-					// SendMessageTimeout 对垂死窗口返回非 0）——recovered 语义
-					// 要求接收方仍在，死进程一律收口 freeze lost
-					if (!aliveOf(pid)) {
-						QEW_LOG_WARN("[FreezeWatch] freeze lost receiver={:s} type=0 radar=1",
-									 st.recvName.toStdString());
-					} else {
-						QEW_LOG_WARN("[FreezeWatch] freeze recovered totalMs={} "
-									 "receiver={:s} type=0 inProgress=false radar=1",
-									 nowMs - st.startMs, st.recvName.toStdString());
-					}
-				} else if (nowMs - st.lastOngoingMs >= 1000) {
-					st.lastOngoingMs = nowMs;
-					QEW_LOG_WARN("[FreezeWatch] freeze ongoing elapsedMs={} "
-								 "receiver={:s} type=0 inProgress=false radar=1",
-								 nowMs - st.startMs, st.recvName.toStdString());
-				}
-			} else if (hung) {
-				st.freezing = true;
-				st.startMs = nowMs;
-				st.lastOngoingMs = nowMs;
-				st.recvName = receiverOf(name, pid);
-				// stalledMs 保守取阈值下界：外部探针只能保证"至少已停滞 threshold"
-				QEW_LOG_WARN("[FreezeWatch] freeze started thresholdMs={} stalledMs={} "
+			// alive 惰性求值：仅 !hung 拍才付 OpenProcess+100ms（探活"成功"可能
+			// 撞目标消亡竞态——垂死窗口返回非 0，死进程一律收口 freeze lost）
+			const ProbeLogic::FreezeEvent ev = rt.tracker.onTick(
+				hung, nowMs, [&pid]() { return aliveOf(pid); });
+			switch (ev.kind) {
+			case ProbeLogic::FreezeEvent::Started:
+				rt.recvName = ProbeLogic::receiverOf(name, pid);
+				m_alarm.emitAlarm("freeze:" + rt.recvName.toStdString(),
+							 "[FreezeWatch] freeze started thresholdMs={} stalledMs={} "
 							 "receiver={:s} type=0 inProgress=false radar=1",
-							 m_thresholdMs, m_thresholdMs, st.recvName.toStdString());
+							 m_thresholdMs, ev.stalledMs, rt.recvName.toStdString());
+				break;
+			case ProbeLogic::FreezeEvent::Ongoing:
+				m_alarm.emitAlarm("freeze:" + rt.recvName.toStdString(),
+							 "[FreezeWatch] freeze ongoing elapsedMs={} "
+							 "receiver={:s} type=0 inProgress=false radar=1",
+							 ev.totalMs, rt.recvName.toStdString());
+				break;
+			case ProbeLogic::FreezeEvent::Recovered:
+				m_alarm.emitAlarm("freeze:" + rt.recvName.toStdString(),
+							 "[FreezeWatch] freeze recovered totalMs={} "
+							 "receiver={:s} type=0 inProgress=false radar=1",
+							 ev.totalMs, rt.recvName.toStdString());
+				break;
+			case ProbeLogic::FreezeEvent::Lost:
+				m_alarm.emitAlarm("freeze:" + rt.recvName.toStdString(),
+							 "[FreezeWatch] freeze lost receiver={:s} type=0 radar=1",
+							 rt.recvName.toStdString());
+				break;
+			case ProbeLogic::FreezeEvent::None:
+				break;
+			}
+		}
+
+		// per-target CPU 启发（V1 R3a）：差分采样对齐 CpuSampler 单核口径
+		// （kernel+user 生命周期累计 100ns→ms / 拍间隔）；新 pid 首拍仅建基线；
+		// OpenProcess/GetProcessTimes 全非阻塞，O(N) 不破坏单线程轮询模型
+		const qint64 cpuElapsedMs = tick.elapsed();
+		for (qint64 pid : alivePids) {
+			if (!m_running)
+				break;
+			const QString name = nameCache.value(pid);
+			if (ProbeLogic::excluded(name, m_excludeNames))
+				continue;
+			qint64 total = -1;
+			const HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
+										 FALSE, DWORD(pid));
+			if (h != nullptr) {
+				FILETIME ftCreate = {}, ftExit = {}, ftKernel = {}, ftUser = {};
+				if (GetProcessTimes(h, &ftCreate, &ftExit, &ftKernel, &ftUser)) {
+					ULARGE_INTEGER k, u;
+					k.LowPart = ftKernel.dwLowDateTime;
+					k.HighPart = ftKernel.dwHighDateTime;
+					u.LowPart = ftUser.dwLowDateTime;
+					u.HighPart = ftUser.dwHighDateTime;
+					total = qint64(k.QuadPart + u.QuadPart);
+				}
+				CloseHandle(h);
+			}
+			if (total < 0)
+				continue;	// 打开/读取失败（受保护进程等）：静默跳过
+			const auto base = lastTotal100ns.constFind(pid);
+			if (base == lastTotal100ns.constEnd()) {
+				lastTotal100ns.insert(pid, total);
+				continue;	// 首拍仅建基线，无差分
+			}
+			const double cpuPct = cpuElapsedMs > 0
+				? 100.0 * (double(total - base.value()) / 10000.0)
+					/ double(cpuElapsedMs)
+				: 0.0;
+			lastTotal100ns.insert(pid, total);
+
+			auto ep = cpuEpisodes.find(pid);
+			if (ep == cpuEpisodes.end())
+				ep = cpuEpisodes.insert(pid, ProbeLogic::CpuEpisodeTracker(
+												 m_cpuThresholdPct, m_cpuRuns));
+			ep.value().thresholdPct = m_cpuThresholdPct;	// 热加载铺路
+			const ProbeLogic::CpuEvent ev = ep.value().onTick(cpuPct);
+			if (ev.kind == ProbeLogic::CpuEvent::Spin) {
+				// 行格式对齐 CpuSampler cpuSpin + radar=1 标注；
+				// receiver=name@pid 实例级唯一（同名多开各自成 episode）
+				m_alarm.emitAlarm("cpu:" + ProbeLogic::receiverOf(name, pid).toStdString(),
+							 "[EventWatcher] slow event receiver={:s} object={:s} "
+							 "event=cpuSpin type=99 depth=0 costMs={:.1f} "
+							 "exclusiveCostMs=0.000 curThread=0x0 recvThread=0x0 "
+							 "match=true thresholdMs={} source=scout radar=1",
+							 ProbeLogic::receiverOf(name, pid).toStdString(),
+							 name.toStdString(), ev.cpuPct, m_cpuThresholdPct);
 			}
 		}
 
@@ -212,37 +320,19 @@ void RadarScheduler::run()
 
 #ifdef QEWT_SCOUT_X11
 
+#include "TargetResolver.h"
 #include "X11Probe.h"
 
 namespace qt_event_watcher {
 
 namespace {
 
-/// per-target 三态状态机（同 Windows 版）
-struct TargetState
+/// 雷达在册目标：冻结状态机（纯逻辑见 ProbeLogic.h）+ 实例级 receiver 名
+struct RadarTarget
 {
-	bool freezing = false;
-	qint64 startMs = 0;
-	qint64 lastOngoingMs = 0;
+	ProbeLogic::FreezeTracker tracker{ 0 };
 	QString recvName;
 };
-
-/// receiver 组名：name@pid 实例级唯一（同 Windows 版）
-QString receiverOf(const QString &name, qint64 pid)
-{
-	return name.isEmpty() ? QStringLiteral("pid:%1").arg(pid)
-						  : QStringLiteral("%1@%2").arg(name).arg(pid);
-}
-
-/// 排除表命中（同 Windows 版）
-bool excluded(const QString &name, const QStringList &patterns)
-{
-	for (const QString &p : patterns) {
-		if (!p.isEmpty() && name.contains(p, Qt::CaseInsensitive))
-			return true;
-	}
-	return false;
-}
 
 /// 进程真实存活判定：/proc/<pid> 对 zombie（已终止待收尸）进程仍存在，
 /// 须读 stat 的 state 字段排除 Z 态（解析锚定同 TargetResolver::statPpidOf）
@@ -264,12 +354,15 @@ bool aliveOf(qint64 pid)
 } // namespace
 
 RadarScheduler::RadarScheduler(int thresholdMs, int intervalMs, qint64 selfPid,
-							   const QStringList &excludeNames, QObject *parent)
+							   const QStringList &excludeNames,
+							   int cpuThresholdPct, int cpuRuns, QObject *parent)
 	: QThread(parent)
 	, m_thresholdMs(thresholdMs)
 	, m_intervalMs(intervalMs)
 	, m_selfPid(selfPid)
 	, m_excludeNames(excludeNames)
+	, m_cpuThresholdPct(cpuThresholdPct)
+	, m_cpuRuns(cpuRuns)
 	, m_running(false)
 {
 }
@@ -315,36 +408,90 @@ void RadarScheduler::run()
 	XSelectInput(dpy, root, StructureNotifyMask);
 
 	QHash<qint64, QString> nameCache;
-	QHash<qint64, TargetState> targets;
+		QHash<qint64, RadarTarget> targets;
 
-	while (m_running) {
-		QElapsedTimer tick;
-		tick.start();
+		// per-target CPU 启发状态（V1 R3a）：episode 迟滞 + 采样基线（ms）
+		QHash<qint64, ProbeLogic::CpuEpisodeTracker> cpuEpisodes;
+		QHash<qint64, double> lastCpuMs;
 
-		const QList<RadarDiscover::RadarWindow> wins
-			= RadarDiscover::sweepWindows(dpy, root, pidAtom);
-		QSet<qint64> alive;
-		QHash<qint64, QList<qint64>> byPid;
-		for (const RadarDiscover::RadarWindow &w : wins) {
-			if (w.pid <= 0 || w.pid == m_selfPid)
-				continue;
-			alive.insert(w.pid);
-			byPid[w.pid].append(w.handle);
-		}
-		QList<qint64> alivePids = alive.values();
-		std::sort(alivePids.begin(), alivePids.end());
+		while (m_running) {
+			QElapsedTimer tick;
+			tick.start();
 
-		for (auto it = targets.begin(); it != targets.end();) {
-			if (!alive.contains(it.key())) {
-				if (it.value().freezing) {
-					QEW_LOG_WARN("[FreezeWatch] freeze lost receiver={:s} type=0 radar=1",
-								 it.value().recvName.toStdString());
+			// 配置热加载（V1 R3b）：mtime 变更即重载（worker 线程独占读，无锁）；
+			// 文件消失/解析失败保持旧配置并告警一次，成功重载后复位
+			if (!m_configFile.isEmpty()) {
+				const QFileInfo cf(m_configFile);
+				const qint64 cm
+					= cf.exists() ? cf.lastModified().toMSecsSinceEpoch() : -1;
+				if (cm != lastConfigMtime) {
+					lastConfigMtime = cm;
+					RadarConfig cfg;
+					if (cm >= 0 && loadRadarConfig(m_configFile, cfg)
+						&& cfg.hasAny()) {
+						configWarned = false;
+						if (cfg.thresholdMs > 0)
+							m_thresholdMs = cfg.thresholdMs;
+						if (cfg.intervalMs > 0)
+							m_intervalMs = cfg.intervalMs;
+						if (cfg.cpuThreshold > 0)
+							m_cpuThresholdPct = cfg.cpuThreshold;
+						if (cfg.cpuRuns > 0)
+							m_cpuRuns = cfg.cpuRuns;
+						if (cfg.excludeSet)
+							m_excludeNames = cfg.exclude;
+						QEW_LOG_INFO("[Scout] radar config reloaded thresholdMs={} "
+									 "intervalMs={} cpuThreshold={} cpuRuns={} exclude={:s}",
+									 m_thresholdMs, m_intervalMs, m_cpuThresholdPct,
+									 m_cpuRuns,
+									 m_excludeNames.join(QLatin1Char(',')).toStdString());
+					} else if (!configWarned) {
+						configWarned = true;
+						QEW_LOG_WARN("[Scout] radar config unavailable/invalid, "
+									 "keeping last: {:s}",
+									 m_configFile.toStdString());
+					}
 				}
-				it = targets.erase(it);
-			} else {
-				++it;
 			}
-		}
+
+			const QList<RadarDiscover::RadarWindow> wins
+				= RadarDiscover::sweepWindows(dpy, root, pidAtom);
+			QSet<qint64> alive;
+			QHash<qint64, QList<qint64>> byPid;
+			for (const RadarDiscover::RadarWindow &w : wins) {
+				if (w.pid <= 0 || w.pid == m_selfPid)
+					continue;
+				alive.insert(w.pid);
+				byPid[w.pid].append(w.handle);
+			}
+			QList<qint64> alivePids = alive.values();
+			std::sort(alivePids.begin(), alivePids.end());
+
+			for (auto it = targets.begin(); it != targets.end();) {
+				if (!alive.contains(it.key())) {
+					if (it.value().tracker.onTargetGone().kind
+						== ProbeLogic::FreezeEvent::Lost) {
+						m_alarm.emitAlarm("freeze:" + it.value().recvName.toStdString(),
+									 "[FreezeWatch] freeze lost receiver={:s} type=0 radar=1",
+									 it.value().recvName.toStdString());
+					}
+					it = targets.erase(it);
+				} else {
+					++it;
+				}
+			}
+			for (auto it = cpuEpisodes.begin(); it != cpuEpisodes.end();) {
+				if (!alive.contains(it.key()))
+					it = cpuEpisodes.erase(it);
+				else
+					++it;
+			}
+			for (auto it = lastCpuMs.begin(); it != lastCpuMs.end();) {
+				if (!alive.contains(it.key()))
+					it = lastCpuMs.erase(it);
+				else
+					++it;
+			}
 		for (auto it = nameCache.begin(); it != nameCache.end();) {
 			if (!alive.contains(it.key()))
 				it = nameCache.erase(it);
@@ -367,7 +514,7 @@ void RadarScheduler::run()
 			if (!m_running)
 				break;
 			const QString name = nameCache.value(pid);
-			if (excluded(name, m_excludeNames))
+			if (ProbeLogic::excluded(name, m_excludeNames))
 				continue;
 			// 逐窗口探活，首个无 pong 即 hung（早退语义同 T1 Linux 版）
 			bool hung = false;
@@ -381,36 +528,80 @@ void RadarScheduler::run()
 					break;
 			}
 
-			TargetState &st = targets[pid];
+			RadarTarget &rt = targets[pid];
+			rt.tracker.thresholdMs = m_thresholdMs;	// 阈值跟随成员（热加载铺路）
 			const qint64 nowMs = clock.elapsed();
-			if (st.freezing) {
-				if (!hung) {
-					st.freezing = false;
-					// 探活"成功"撞目标消亡竞态同 Windows 版（XSendEvent 对垂死
-					// 窗口返回 0 → pingWindow 按"不可探活"放行非 hung）——
-					// recovered 语义要求接收方仍在，死进程一律收口 freeze lost
-					if (!aliveOf(pid)) {
-						QEW_LOG_WARN("[FreezeWatch] freeze lost receiver={:s} type=0 radar=1",
-									 st.recvName.toStdString());
-					} else {
-						QEW_LOG_WARN("[FreezeWatch] freeze recovered totalMs={} "
-									 "receiver={:s} type=0 inProgress=false radar=1",
-									 nowMs - st.startMs, st.recvName.toStdString());
-					}
-				} else if (nowMs - st.lastOngoingMs >= 1000) {
-					st.lastOngoingMs = nowMs;
-					QEW_LOG_WARN("[FreezeWatch] freeze ongoing elapsedMs={} "
-								 "receiver={:s} type=0 inProgress=false radar=1",
-								 nowMs - st.startMs, st.recvName.toStdString());
-				}
-			} else if (hung) {
-				st.freezing = true;
-				st.startMs = nowMs;
-				st.lastOngoingMs = nowMs;
-				st.recvName = receiverOf(name, pid);
-				QEW_LOG_WARN("[FreezeWatch] freeze started thresholdMs={} stalledMs={} "
+			// alive 惰性求值：仅 !hung 拍才读 /proc（探活"成功"撞目标消亡竞态
+			// 同 Windows 版——XSendEvent 对垂死窗口返回 0 → pingWindow 按
+			// "不可探活"放行非 hung；死进程一律收口 freeze lost）
+			const ProbeLogic::FreezeEvent ev = rt.tracker.onTick(
+				hung, nowMs, [&pid]() { return aliveOf(pid); });
+			switch (ev.kind) {
+			case ProbeLogic::FreezeEvent::Started:
+				rt.recvName = ProbeLogic::receiverOf(name, pid);
+				m_alarm.emitAlarm("freeze:" + rt.recvName.toStdString(),
+							 "[FreezeWatch] freeze started thresholdMs={} stalledMs={} "
 							 "receiver={:s} type=0 inProgress=false radar=1",
-							 m_thresholdMs, m_thresholdMs, st.recvName.toStdString());
+							 m_thresholdMs, ev.stalledMs, rt.recvName.toStdString());
+				break;
+			case ProbeLogic::FreezeEvent::Ongoing:
+				m_alarm.emitAlarm("freeze:" + rt.recvName.toStdString(),
+							 "[FreezeWatch] freeze ongoing elapsedMs={} "
+							 "receiver={:s} type=0 inProgress=false radar=1",
+							 ev.totalMs, rt.recvName.toStdString());
+				break;
+			case ProbeLogic::FreezeEvent::Recovered:
+				m_alarm.emitAlarm("freeze:" + rt.recvName.toStdString(),
+							 "[FreezeWatch] freeze recovered totalMs={} "
+							 "receiver={:s} type=0 inProgress=false radar=1",
+							 ev.totalMs, rt.recvName.toStdString());
+				break;
+			case ProbeLogic::FreezeEvent::Lost:
+				m_alarm.emitAlarm("freeze:" + rt.recvName.toStdString(),
+							 "[FreezeWatch] freeze lost receiver={:s} type=0 radar=1",
+							 rt.recvName.toStdString());
+				break;
+			case ProbeLogic::FreezeEvent::None:
+				break;
+			}
+		}
+
+		// per-target CPU 启发（V1 R3a）：/proc stat utime+stime 差分（ms）/
+		// 拍间隔，口径对齐 CpuSampler Linux 版；新 pid 首拍仅建基线；
+		// /proc 读全非阻塞，O(N) 不破坏单线程轮询模型
+		const qint64 cpuElapsedMs = tick.elapsed();
+		for (qint64 pid : alivePids) {
+			if (!m_running)
+				break;
+			const QString name = nameCache.value(pid);
+			if (ProbeLogic::excluded(name, m_excludeNames))
+				continue;
+			double cpuMs = 0.0;
+			if (!TargetResolver::cpuTimeMsOf(pid, &cpuMs))
+				continue;	// 读取失败：静默跳过
+			const auto base = lastCpuMs.constFind(pid);
+			if (base == lastCpuMs.constEnd()) {
+				lastCpuMs.insert(pid, cpuMs);
+				continue;	// 首拍仅建基线，无差分
+			}
+			const double cpuPct = cpuElapsedMs > 0
+				? 100.0 * (cpuMs - base.value()) / double(cpuElapsedMs) : 0.0;
+			lastCpuMs.insert(pid, cpuMs);
+
+			auto ep = cpuEpisodes.find(pid);
+			if (ep == cpuEpisodes.end())
+				ep = cpuEpisodes.insert(pid, ProbeLogic::CpuEpisodeTracker(
+												 m_cpuThresholdPct, m_cpuRuns));
+			ep.value().thresholdPct = m_cpuThresholdPct;	// 热加载铺路
+			const ProbeLogic::CpuEvent ev = ep.value().onTick(cpuPct);
+			if (ev.kind == ProbeLogic::CpuEvent::Spin) {
+				m_alarm.emitAlarm("cpu:" + ProbeLogic::receiverOf(name, pid).toStdString(),
+							 "[EventWatcher] slow event receiver={:s} object={:s} "
+							 "event=cpuSpin type=99 depth=0 costMs={:.1f} "
+							 "exclusiveCostMs=0.000 curThread=0x0 recvThread=0x0 "
+							 "match=true thresholdMs={} source=scout radar=1",
+							 ProbeLogic::receiverOf(name, pid).toStdString(),
+							 name.toStdString(), ev.cpuPct, m_cpuThresholdPct);
 			}
 		}
 
@@ -430,7 +621,8 @@ void RadarScheduler::run()
 
 namespace qt_event_watcher {
 
-RadarScheduler::RadarScheduler(int, int, qint64, const QStringList &, QObject *parent)
+RadarScheduler::RadarScheduler(int, int, qint64, const QStringList &, int, int,
+							   QObject *parent)
 	: QThread(parent)
 {
 }
@@ -445,7 +637,8 @@ void RadarScheduler::run() {}
 
 namespace qt_event_watcher {
 
-RadarScheduler::RadarScheduler(int, int, qint64, const QStringList &, QObject *parent)
+RadarScheduler::RadarScheduler(int, int, qint64, const QStringList &, int, int,
+							   QObject *parent)
 	: QThread(parent)
 {
 }

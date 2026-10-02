@@ -7,7 +7,7 @@
 [![Qt](https://img.shields.io/badge/Qt-5.15%20%7C%206.5-41cd52.svg)](https://www.qt.io/)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](docs/02_需求范围与版本矩阵.md)
 [![standard](https://img.shields.io/badge/C%2B%2B-17-00599c.svg)](CMakeLists.txt)
-[![tests](https://img.shields.io/badge/tests-25%20cases%20%2F%2096%20checks-2ea44f.svg)](tests/unit/UnitTests.cpp)
+[![tests](https://img.shields.io/badge/tests-35%20cases%20%2F%20153%20checks-2ea44f.svg)](tests/unit/UnitTests.cpp)
 [![static analysis](https://img.shields.io/badge/cppcheck%20%2F%20W4-0%20findings-2ea44f.svg)](scripts/static-check.ps1)
 [![sanitizer](https://img.shields.io/badge/ASan-0%20reports-2ea44f.svg)](docs/21_版本规划与交付物.md)
 

@@ -337,12 +337,18 @@ jobs:
           # 6s 忙转 → freeze started（receiver=name@pid 实例级唯一 + radar=1）；
           # 7.5s 后泵恢复 → recovered
           export LD_LIBRARY_PATH="/opt/qt/${{ matrix.qtVersion }}/${{ matrix.qtArch }}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          # V1 R4：aggregator 同机 QLocalServer 收 uplink → JSON 落盘，
+          # 断言 radar=1 记录全链路贯通（received==pushed==lastSeq）
           timeout 25 xvfb-run -a bash -c '
+            ./build-ci/bin/aggregator --duration 12 --out scout_radar_uplink.json > aggregator.log 2>&1 &
+            agg=$!
+            sleep 1
             ./build-ci/bin/basic_demo --spin 6000 > basic_demo3.log 2>&1 &
             demo=$!
             sleep 1.5
-            ./build-ci/bin/scout --radar --threshold 2000 --interval 500 --duration 9000 2>&1 | tee scout_radar.log
+            ./build-ci/bin/scout --radar --threshold 2000 --interval 500 --duration 9000 --uplink QtEventWatcherAggregator 2>&1 | tee scout_radar.log
             kill $demo 2>/dev/null || true
+            wait $agg || true
           ' || ec=$?
           ec=${ec:-0}
           if ! grep -q 'freeze started' scout_radar.log || ! grep -q 'radar=1' scout_radar.log; then
@@ -367,6 +373,48 @@ jobs:
             echo "::error::scout e2e: radar freeze recovered line missing"
             exit 1
           fi
+          # V1 R4：uplink 全链路断言——JSON 含 radar=1 记录且健康自洽
+          #（received=aggregator 实收 == pushed=客户端已推 == lastSeq=末序号）。
+          # bash -e 下用 || 捕获退出码，失败仍走取证块（summary+::error）后退出
+          uplink_ec=0
+          python3 - <<'PYEOF' || uplink_ec=$?
+          import json, sys
+          try:
+              d = json.load(open('scout_radar_uplink.json'))
+          except Exception as e:
+              print(f"FAIL: uplink json unreadable: {e}")
+              sys.exit(1)
+          sessions = d.get('sessions', [])
+          if not sessions:
+              print("FAIL: no sessions in uplink json")
+              sys.exit(1)
+          ok = False
+          for s in sessions:
+              recs = s.get('records', [])
+              has_radar = any('radar=1' in json.dumps(r) for r in recs)
+              h = s.get('health', {}) or {}
+              recv = s.get('received', -1)
+              pushed, lastSeq = h.get('pushed', -1), h.get('lastSeq', -1)
+              print(f"session pid={s.get('host_pid')} received={recv} "
+                    f"pushed={pushed} lastSeq={lastSeq} "
+                    f"records={len(recs)} radar1={has_radar}")
+              if has_radar and recv > 0 and recv == pushed == lastSeq:
+                  ok = True
+          if not ok:
+              print("FAIL: radar=1 record with received==pushed==lastSeq not found")
+              sys.exit(1)
+          print("scout radar uplink chain OK")
+          PYEOF
+          if [ $uplink_ec -ne 0 ]; then
+            {
+              echo "### Scout radar uplink e2e failure"
+              echo '```'
+              tail -20 aggregator.log || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::scout e2e: radar uplink chain assertion failed"
+            exit 1
+          fi
 
       - name: Upload smoke log
         if: always()
@@ -384,6 +432,10 @@ jobs:
           path: |
             scout.log
             scout_freeze.log
+            scout_radar.log
             basic_demo.log
             basic_demo2.log
+            basic_demo3.log
+            aggregator.log
+            scout_radar_uplink.json
           if-no-files-found: ignore

@@ -18,8 +18,7 @@ CpuSampler::CpuSampler(const QString &targetName, qint64 targetPid,
 	: QObject(parent)
 	, m_targetName(targetName)
 	, m_targetPid(targetPid)
-	, m_thresholdPct(cpuThresholdPct)
-	, m_runsNeeded(runsNeeded > 0 ? runsNeeded : 1)
+	, m_episode(cpuThresholdPct, runsNeeded)
 {
 	m_timer.setInterval(intervalMs > 0 ? intervalMs : 250);
 	connect(&m_timer, &QTimer::timeout, this, [this]() { sample(); });
@@ -41,9 +40,7 @@ void CpuSampler::sample()
 	QList<qint64> pids = TargetResolver::resolvePids(m_targetName, m_targetPid);
 	if (pids.isEmpty()) {
 		// 目标消失：观测断点，episode 状态复位（重连后重新起算）
-		m_streak = 0;
-		m_streakDown = 0;
-		m_emitted = false;
+		m_episode.reset();
 		m_lastTotal100ns.clear();
 		return;
 	}
@@ -78,31 +75,21 @@ void CpuSampler::sample()
 	const double cpuPct = elapsedMs > 0
 		? 100.0 * (double(delta100ns) / 10000.0) / double(elapsedMs) : 0.0;
 
-	if (cpuPct >= m_thresholdPct) {
-		m_streakDown = 0;
-		if (++m_streak >= m_runsNeeded && !m_emitted) {
-			m_emitted = true;
-			QString proc = !m_targetName.isEmpty()
-				? m_targetName : TargetResolver::processNameOf(m_targetPid);
-			if (proc.isEmpty())
-				proc = QStringLiteral("pid:%1").arg(m_targetPid);
-			// 行格式对齐自监控 slow event（hydrateRecord 通用解析可用）；
-			// event=cpuSpin / source=scout 诚实标注启发式来源与口径
-			QEW_LOG_WARN("[EventWatcher] slow event receiver={:s} object={:s} "
-						 "event=cpuSpin type=99 depth=0 costMs={:.1f} "
-						 "exclusiveCostMs=0.000 curThread=0x0 recvThread=0x0 "
-						 "match=true thresholdMs={} source=scout",
-						 proc.toStdString(), proc.toStdString(),
-						 cpuPct, m_thresholdPct);
-		}
-	} else {
-		// 迟滞收口：连续 4 拍低于阈值才关闭 episode（采样噪声的单拍抖动
-		// 不重置——实测 6s 单次忙转曾因单拍 <95% 被撕成 3 条告警）
-		m_streak = 0;
-		if (++m_streakDown >= 4) {
-			m_streakDown = 0;
-			m_emitted = false;
-		}
+	const ProbeLogic::CpuEvent ev = m_episode.onTick(cpuPct);
+	if (ev.kind == ProbeLogic::CpuEvent::Spin) {
+		QString proc = !m_targetName.isEmpty()
+			? m_targetName : TargetResolver::processNameOf(m_targetPid);
+		if (proc.isEmpty())
+			proc = QStringLiteral("pid:%1").arg(m_targetPid);
+		// 行格式对齐自监控 slow event（hydrateRecord 通用解析可用）；
+		// event=cpuSpin / source=scout 诚实标注启发式来源与口径
+		m_alarm.emitAlarm("cpu:" + proc.toStdString(),
+					 "[EventWatcher] slow event receiver={:s} object={:s} "
+					 "event=cpuSpin type=99 depth=0 costMs={:.1f} "
+					 "exclusiveCostMs=0.000 curThread=0x0 recvThread=0x0 "
+					 "match=true thresholdMs={} source=scout",
+					 proc.toStdString(), proc.toStdString(),
+					 ev.cpuPct, m_episode.thresholdPct);
 	}
 }
 
@@ -156,8 +143,7 @@ CpuSampler::CpuSampler(const QString &targetName, qint64 targetPid,
 	: QObject(parent)
 	, m_targetName(targetName)
 	, m_targetPid(targetPid)
-	, m_thresholdPct(cpuThresholdPct)
-	, m_runsNeeded(runsNeeded > 0 ? runsNeeded : 1)
+	, m_episode(cpuThresholdPct, runsNeeded)
 {
 	m_timer.setInterval(intervalMs > 0 ? intervalMs : 250);
 	connect(&m_timer, &QTimer::timeout, this, [this]() { sample(); });
@@ -179,9 +165,7 @@ void CpuSampler::sample()
 	QList<qint64> pids = TargetResolver::resolvePids(m_targetName, m_targetPid);
 	if (pids.isEmpty()) {
 		// 目标消失：观测断点，episode 状态复位（重连后重新起算）
-		m_streak = 0;
-		m_streakDown = 0;
-		m_emitted = false;
+		m_episode.reset();
 		m_lastCpuMs.clear();
 		return;
 	}
@@ -208,31 +192,20 @@ void CpuSampler::sample()
 	const double cpuPct = elapsedMs > 0
 		? 100.0 * deltaMs / double(elapsedMs) : 0.0;
 
-	if (cpuPct >= m_thresholdPct) {
-		m_streakDown = 0;
-		if (++m_streak >= m_runsNeeded && !m_emitted) {
-			m_emitted = true;
-			QString proc = !m_targetName.isEmpty()
-				? m_targetName : TargetResolver::processNameOf(m_targetPid);
-			if (proc.isEmpty())
-				proc = QStringLiteral("pid:%1").arg(m_targetPid);
-			// 行格式对齐自监控 slow event（hydrateRecord 通用解析可用）；
-			// event=cpuSpin / source=scout 诚实标注启发式来源与口径
-			QEW_LOG_WARN("[EventWatcher] slow event receiver={:s} object={:s} "
-						 "event=cpuSpin type=99 depth=0 costMs={:.1f} "
-						 "exclusiveCostMs=0.000 curThread=0x0 recvThread=0x0 "
-						 "match=true thresholdMs={} source=scout",
-						 proc.toStdString(), proc.toStdString(),
-						 cpuPct, m_thresholdPct);
-		}
-	} else {
-		// 迟滞收口：连续 4 拍低于阈值才关闭 episode（采样噪声的单拍抖动
-		// 不重置——实测 6s 单次忙转曾因单拍 <95% 被撕成 3 条告警）
-		m_streak = 0;
-		if (++m_streakDown >= 4) {
-			m_streakDown = 0;
-			m_emitted = false;
-		}
+	const ProbeLogic::CpuEvent ev = m_episode.onTick(cpuPct);
+	if (ev.kind == ProbeLogic::CpuEvent::Spin) {
+		QString proc = !m_targetName.isEmpty()
+			? m_targetName : TargetResolver::processNameOf(m_targetPid);
+		if (proc.isEmpty())
+			proc = QStringLiteral("pid:%1").arg(m_targetPid);
+		// 行格式对齐自监控 slow event（hydrateRecord 通用解析可用）；
+		// event=cpuSpin / source=scout 诚实标注启发式来源与口径
+		QEW_LOG_WARN("[EventWatcher] slow event receiver={:s} object={:s} "
+					 "event=cpuSpin type=99 depth=0 costMs={:.1f} "
+					 "exclusiveCostMs=0.000 curThread=0x0 recvThread=0x0 "
+					 "match=true thresholdMs={} source=scout",
+					 proc.toStdString(), proc.toStdString(),
+					 ev.cpuPct, m_episode.thresholdPct);
 	}
 }
 
