@@ -35,7 +35,11 @@ private:
 	int m_runsNeeded = 0;
 	QTimer m_timer;
 	QElapsedTimer m_sampleClock;					///< 相邻两拍间隔（cpu% 分母）
+#if defined(Q_OS_WIN)
 	QHash<qint64, qint64> m_lastTotal100ns;			///< pid → 上拍 kernel+user 累计（100ns 单位）
+#elif defined(Q_OS_UNIX)
+	QHash<qint64, double> m_lastCpuMs;				///< pid → 上拍 utime+stime 累计（ms；/proc stat tick 换算）
+#endif
 	int m_streak = 0;								///< 连续超阈值拍数
 	int m_streakDown = 0;							///< 连续低于阈值拍数（episode 迟滞收口）
 	bool m_emitted = false;							///< 本 episode 已发告警（防刷屏）

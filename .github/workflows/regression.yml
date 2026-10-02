@@ -197,6 +197,17 @@ jobs:
           xvfb-run -a ./build-ci/bin/TestEventWatcher 2>&1 | tee smoke.log
           if grep -q FAIL smoke.log; then echo "::error::smoke reported FAIL lines"; exit 1; fi
 
+      - name: Scout e2e - cpu probe (xvfb)
+        run: |
+          set -o pipefail
+          # basic_demo 1.5s 后主线程 busy-loop 6s（CPU 单核满转）；timeout 兜底防泄漏
+          timeout 8 xvfb-run -a ./build-ci/bin/basic_demo --spin 6000 > basic_demo.log 2>&1 &
+          sleep 2
+          # scout 挂名采样 10s（3 拍迟滞 × 250ms << 6s 忙转，必命中 cpuSpin）
+          xvfb-run -a ./build-ci/bin/scout --name basic_demo --cpu-threshold 95 --duration 10000 2>&1 | tee scout.log
+          grep -q 'event=cpuSpin' scout.log \
+            || { echo "::error::scout e2e: cpuSpin line missing"; exit 1; }
+
       - name: Upload smoke log
         if: always()
         uses: actions/upload-artifact@v4

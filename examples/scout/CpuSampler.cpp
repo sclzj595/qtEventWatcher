@@ -108,7 +108,137 @@ void CpuSampler::sample()
 
 } // namespace qt_event_watcher
 
-#else // 非 Windows：空实现（Scout 为 Windows 专属能力）
+#elif defined(Q_OS_UNIX)	// Linux：/proc/<pid>/stat utime+stime 差分，口径对齐 Windows 版
+
+#include "WatchLogMacros.h"
+
+#include <unistd.h>
+
+#include <QFile>
+#include <QStringList>
+
+namespace qt_event_watcher {
+
+namespace {
+
+/// /proc/<pid>/stat field 14+15（utime+stime，tick）→ 累计 CPU 毫秒。
+/// comm（field 2）可含空格与 ')'——以最后一个 ')' 锚定 comm 结束后再切字段
+/// （其后字段为数字不含括号），否则进程名带空格时 utime/stime 错位。
+/// ')' 后序列：state(3) ppid(4) ... utime(14)→下标11 stime(15)→下标12。
+bool cpuTimeMsOf(qint64 pid, double *outMs)
+{
+	QFile f(QStringLiteral("/proc/%1/stat").arg(pid));
+	if (!f.open(QIODevice::ReadOnly))
+		return false;
+	const QString data = QString::fromUtf8(f.readAll());
+	const int close = data.lastIndexOf(QLatin1Char(')'));
+	if (close < 0 || close + 2 >= data.size())
+		return false;
+	const QStringList fields = data.mid(close + 2).split(QLatin1Char(' '));
+	if (fields.size() < 13)
+		return false;
+	bool okU = false;
+	bool okS = false;
+	const double utime = fields.at(11).toDouble(&okU);
+	const double stime = fields.at(12).toDouble(&okS);
+	if (!okU || !okS)
+		return false;
+	static const double ticksToMs = 1000.0 / double(sysconf(_SC_CLK_TCK));
+	*outMs = (utime + stime) * ticksToMs;
+	return true;
+}
+
+} // namespace
+
+CpuSampler::CpuSampler(const QString &targetName, qint64 targetPid,
+					   int cpuThresholdPct, int runsNeeded, int intervalMs,
+					   QObject *parent)
+	: QObject(parent)
+	, m_targetName(targetName)
+	, m_targetPid(targetPid)
+	, m_thresholdPct(cpuThresholdPct)
+	, m_runsNeeded(runsNeeded > 0 ? runsNeeded : 1)
+{
+	m_timer.setInterval(intervalMs > 0 ? intervalMs : 250);
+	connect(&m_timer, &QTimer::timeout, this, [this]() { sample(); });
+	m_sampleClock.start();
+}
+
+void CpuSampler::start()
+{
+	m_timer.start();
+}
+
+void CpuSampler::stop()
+{
+	m_timer.stop();
+}
+
+void CpuSampler::sample()
+{
+	QList<qint64> pids = TargetResolver::resolvePids(m_targetName, m_targetPid);
+	if (pids.isEmpty()) {
+		// 目标消失：观测断点，episode 状态复位（重连后重新起算）
+		m_streak = 0;
+		m_streakDown = 0;
+		m_emitted = false;
+		m_lastCpuMs.clear();
+		return;
+	}
+	pids.append(TargetResolver::descendantPids(pids));	// 3 层后代（Electron/WebView2 渲染进程树同覆盖）
+
+	const qint64 elapsedMs = m_sampleClock.elapsed();
+	m_sampleClock.restart();
+
+	// 累计差分：utime+stime 是进程生命周期累计值（tick 换算 ms），相减得拍内
+	// 用量；新出现进程首拍只有基线无差分，自然跳过（与 Windows 版同口径）
+	double deltaMs = 0.0;
+	QHash<qint64, double> current;
+	for (qint64 pid : pids) {
+		double cpuMs = 0.0;
+		if (!cpuTimeMsOf(pid, &cpuMs))
+			continue;
+		if (m_lastCpuMs.contains(pid))
+			deltaMs += cpuMs - m_lastCpuMs.value(pid);
+		current.insert(pid, cpuMs);
+	}
+	m_lastCpuMs = current;		// 仅保留存活 pid，防泄漏
+
+	// 单核口径：拍内 CPU 毫秒 / 拍间隔
+	const double cpuPct = elapsedMs > 0
+		? 100.0 * deltaMs / double(elapsedMs) : 0.0;
+
+	if (cpuPct >= m_thresholdPct) {
+		m_streakDown = 0;
+		if (++m_streak >= m_runsNeeded && !m_emitted) {
+			m_emitted = true;
+			QString proc = !m_targetName.isEmpty()
+				? m_targetName : TargetResolver::processNameOf(m_targetPid);
+			if (proc.isEmpty())
+				proc = QStringLiteral("pid:%1").arg(m_targetPid);
+			// 行格式对齐自监控 slow event（hydrateRecord 通用解析可用）；
+			// event=cpuSpin / source=scout 诚实标注启发式来源与口径
+			QEW_LOG_WARN("[EventWatcher] slow event receiver={:s} object={:s} "
+						 "event=cpuSpin type=99 depth=0 costMs={:.1f} "
+						 "exclusiveCostMs=0.000 curThread=0x0 recvThread=0x0 "
+						 "match=true thresholdMs={} source=scout",
+						 proc.toStdString(), proc.toStdString(),
+						 cpuPct, m_thresholdPct);
+		}
+	} else {
+		// 迟滞收口：连续 4 拍低于阈值才关闭 episode（采样噪声的单拍抖动
+		// 不重置——实测 6s 单次忙转曾因单拍 <95% 被撕成 3 条告警）
+		m_streak = 0;
+		if (++m_streakDown >= 4) {
+			m_streakDown = 0;
+			m_emitted = false;
+		}
+	}
+}
+
+} // namespace qt_event_watcher
+
+#else // 其他平台：空实现（Scout 探针未覆盖的平台）
 
 namespace qt_event_watcher {
 
@@ -122,4 +252,4 @@ void CpuSampler::sample() {}
 
 } // namespace qt_event_watcher
 
-#endif // Q_OS_WIN
+#endif // Q_OS_WIN / Q_OS_UNIX
