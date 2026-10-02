@@ -9,8 +9,9 @@ build-asan/
 build-aqtci/
 out/
 
-# 一键打包产物（打包.bat -> dist\*.zip）
-dist/
+# 一键打包产物（打包.bat -> dist\*.zip）；前导 / 锚定仓库根，
+# 否则任意层级的 dist 目录（如 scripts/dist/ 包内模板）都会被误伤
+/dist/
 
 # Trae 本地工作产物（commit 草稿/Release 草稿/计划文档，不入库）
 .trae/
