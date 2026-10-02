@@ -153,7 +153,13 @@ jobs:
       - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libx11-dev xvfb
+          # libgl1-mesa-dev：Qt5Gui 配置期需 gl.h（缺失即 Configure 失败——
+          # Run 12 取证真实失败点是 Configure exit 1）+ 运行期 libGL.so.1；
+          # xcb 系：平台插件 xcb 的运行依赖（Smoke 于 xvfb 下需加载 xcb 插件）
+          sudo apt-get install -y libx11-dev xvfb libgl1-mesa-dev libxkbcommon-x11-0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 \
+            libx11-xcb1
 
       - name: Install Qt (${{ matrix.qtVersion }})
         run: |
@@ -163,7 +169,23 @@ jobs:
             || { echo "::error::Qt prefix missing under /opt/qt"; exit 1; }
 
       - name: Configure
-        run: cmake -S . -B build-ci -DCMAKE_PREFIX_PATH=/opt/qt/${{ matrix.qtVersion }}/${{ matrix.qtArch }}
+        run: |
+          set -o pipefail
+          cmake -S . -B build-ci -DCMAKE_PREFIX_PATH=/opt/qt/${{ matrix.qtVersion }}/${{ matrix.qtArch }} 2>&1 | tee configure.log
+
+      - name: Report configure errors
+        if: failure()
+        run: |
+          if [ ! -f configure.log ]; then echo "::error::configure.log missing"; exit 0; fi
+          # build.log 已存在 = 失败发生在 configure 之后（smoke/e2e），不重复归因
+          if [ -f build.log ]; then exit 0; fi
+          {
+            echo "### Configure errors"
+            echo '```'
+            grep -i -m 20 'error\|failed' configure.log || tail -40 configure.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -i 'error\|failed' configure.log | head -20 | while read -r l; do echo "::error::$l"; done || true
 
       - name: Build
         run: |
@@ -193,33 +215,97 @@ jobs:
       - name: Smoke (xvfb)
         run: |
           set -o pipefail
+          # Qt 随包运行库优先（aqt 包内 lib/ 带 libicu* 等，系统 soname 可能缺代）
+          export LD_LIBRARY_PATH="/opt/qt/${{ matrix.qtVersion }}/${{ matrix.qtArch }}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          # 启动取证：动态库 soname 缺失先写 summary（匿名可读），再进冒烟
+          ldd ./build-ci/bin/TestEventWatcher | grep 'not found' > missing_libs.txt || true
+          if [ -s missing_libs.txt ]; then
+            {
+              echo "### Missing shared libs"
+              echo '```'
+              cat missing_libs.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            while read -r l; do echo "::error::$l"; done < missing_libs.txt
+          fi
           # Widgets 集成测试需平台插件显示；xvfb 无头跑（行尾 FAIL 与 exit 码双断言）
           xvfb-run -a ./build-ci/bin/TestEventWatcher 2>&1 | tee smoke.log
-          if grep -q FAIL smoke.log; then echo "::error::smoke reported FAIL lines"; exit 1; fi
+          ec=$?
+          if [ $ec -ne 0 ]; then
+            {
+              echo "### Smoke failure (exit=$ec)"
+              echo '```'
+              tail -60 smoke.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            tail -20 smoke.log | while read -r l; do echo "::error::$l"; done || true
+            exit $ec
+          fi
+          if grep -q FAIL smoke.log; then
+            {
+              echo "### Smoke FAIL lines"
+              echo '```'
+              grep -m 20 FAIL smoke.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            grep -m 20 FAIL smoke.log | while read -r l; do echo "::error::$l"; done || true
+            exit 1
+          fi
 
       - name: Scout e2e - cpu probe (xvfb)
         run: |
           set -o pipefail
+          export LD_LIBRARY_PATH="/opt/qt/${{ matrix.qtVersion }}/${{ matrix.qtArch }}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           # basic_demo 1.5s 后主线程 busy-loop 6s（CPU 单核满转）；timeout 兜底防泄漏
           timeout 8 xvfb-run -a ./build-ci/bin/basic_demo --spin 6000 > basic_demo.log 2>&1 &
           sleep 2
           # scout 挂名采样 10s（3 拍迟滞 × 250ms << 6s 忙转，必命中 cpuSpin）
           xvfb-run -a ./build-ci/bin/scout --name basic_demo --cpu-threshold 95 --duration 10000 2>&1 | tee scout.log
-          grep -q 'event=cpuSpin' scout.log \
-            || { echo "::error::scout e2e: cpuSpin line missing"; exit 1; }
+          if ! grep -q 'event=cpuSpin' scout.log; then
+            {
+              echo "### Scout cpu e2e failure"
+              echo '```'
+              tail -40 scout.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::scout e2e: cpuSpin line missing"
+            exit 1
+          fi
 
-      - name: Scout e2e - freeze probe (xvfb)
+      - name: Scout e2e - freeze probe (shared Xvfb)
         run: |
           set -o pipefail
-          # 主线程 busy-loop 6s = 消息泵停摆：_NET_WM_PING 无应答 → freeze started；
-          # 7.5s 后忙转结束泵恢复 → recovered（threshold 2000 下界口径）
-          timeout 9 xvfb-run -a ./build-ci/bin/basic_demo --spin 6000 > basic_demo2.log 2>&1 &
-          sleep 1.5
-          xvfb-run -a ./build-ci/bin/scout --name basic_demo --threshold 2000 --duration 9000 2>&1 | tee scout_freeze.log
-          grep -q 'freeze started' scout_freeze.log \
-            || { echo "::error::scout e2e: freeze started line missing"; exit 1; }
-          grep -q 'freeze recovered' scout_freeze.log \
-            || { echo "::error::scout e2e: freeze recovered line missing"; exit 1; }
+          # basic_demo 与 scout 必须同屏（同一 X server）——分开的 xvfb-run 是两个
+          # 独立 X server，_NET_WM_PING 跨 server 不可达。主线程 busy-loop 6s =
+          # 消息泵停摆 → freeze started；7.5s 后泵恢复 → recovered（2000 下界口径）
+          export LD_LIBRARY_PATH="/opt/qt/${{ matrix.qtVersion }}/${{ matrix.qtArch }}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          timeout 25 xvfb-run -a bash -c '
+            ./build-ci/bin/basic_demo --spin 6000 > basic_demo2.log 2>&1 &
+            demo=$!
+            sleep 1.5
+            ./build-ci/bin/scout --name basic_demo --threshold 2000 --duration 9000 2>&1 | tee scout_freeze.log
+            kill $demo 2>/dev/null || true
+          '
+          if ! grep -q 'freeze started' scout_freeze.log; then
+            {
+              echo "### Scout freeze e2e failure (no started line)"
+              echo '```'
+              tail -40 scout_freeze.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::scout e2e: freeze started line missing"
+            exit 1
+          fi
+          if ! grep -q 'freeze recovered' scout_freeze.log; then
+            {
+              echo "### Scout freeze e2e failure (no recovered line)"
+              echo '```'
+              tail -40 scout_freeze.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::scout e2e: freeze recovered line missing"
+            exit 1
+          fi
 
       - name: Upload smoke log
         if: always()
