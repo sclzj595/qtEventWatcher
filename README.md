@@ -5,7 +5,7 @@
 [![CI](https://github.com/sclzj595/qtEventWatcher/actions/workflows/regression.yml/badge.svg)](https://github.com/sclzj595/qtEventWatcher/actions/workflows/regression.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Qt](https://img.shields.io/badge/Qt-5.15%20%7C%206.5-41cd52.svg)](https://www.qt.io/)
-[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20MSVC%20%7C%20MinGW-lightgrey.svg)](docs/02_需求范围与版本矩阵.md)
+[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](docs/02_需求范围与版本矩阵.md)
 [![standard](https://img.shields.io/badge/C%2B%2B-17-00599c.svg)](CMakeLists.txt)
 [![tests](https://img.shields.io/badge/tests-25%20cases%20%2F%2096%20checks-2ea44f.svg)](tests/unit/UnitTests.cpp)
 [![static analysis](https://img.shields.io/badge/cppcheck%20%2F%20W4-0%20findings-2ea44f.svg)](scripts/static-check.ps1)
@@ -150,7 +150,7 @@ ctest -C Release                                        # 冒烟测试（在 bui
 
 - [x] **V6 质量证明线**：纯逻辑单元测试 + 静态分析门禁 + ASan 实证（[docs/31](docs/31_V6实施计划.md)）
 - [ ] **Scout 外部探针（产品线 B）**：进程外检测任意桌面程序（Electron/**Tauri**/WPF/Win32）的卡顿，统一汇入 aggregator 报告——**S1 已交付**：T1 窗口冻结 + T1b CPU 启发（[examples/scout](examples/scout/)，[docs/32](docs/32_V7-Scout实施计划.md)）；**S2 已交付**：T2 CDP 长任务——`scout --cdp-port 9222` 直连 Electron/Chromium 页面，PerformanceObserver 精确到渲染长任务（目标带 `--remote-debugging-port` 冷启动）；**Tauri 已实证**：T1/T1b/T2 全通过（WebView2 端口经 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 注入，孙进程 CPU 采样已覆盖）
-- [ ] Linux 验证（可移植性已在代码层预留，等环境）
+- [x] **Linux 探针适配**（v6.4.0）：Scout 三探针 Linux 全可用——调用栈（backtrace+dladdr）、进程解析与 CPU 采样（/proc）、窗口冻结（X11 _NET_WM_PING，Xvfb/无 WM 兜底）；CI 双矩阵（Qt 5.15/6.5 × gcc）编译+冒烟+CPU/冻结 e2e（[docs/32 §10](docs/32_V7-Scout实施计划.md)）；Wayland native 应用暂走降级（CPU/CDP 探针不受影响）
 - [ ] QML/Qt Quick 事件路径支持（当前面向 Widgets）
 - [ ] 火焰图导出（调用栈数据已具备，缺渲染端）
 - [ ] vcpkg / Conan 包管理接入

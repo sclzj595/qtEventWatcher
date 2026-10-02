@@ -3,6 +3,19 @@
 本文件记录 QtEventWatcher 的版本演进。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号对应仓库迭代里程碑（详细规划与逐 Phase 实施记录见 [docs/21_版本规划与交付物.md](docs/21_版本规划与交付物.md)）。
 
+## [v6.4.0] - 2026-10-02
+
+### 新增
+- **Linux 探针适配**（V7，docs/32 §10）：Scout 三探针 Linux 全可用——
+  - **T1 窗口冻结**（X11）：`_NET_WM_PING` 探活对齐 Windows `SendMessageTimeoutW(WM_NULL)` 语义（token 原子计数防迟到 pong 串扰；`_NET_CLIENT_LIST` ∪ root 子窗口枚举 + `_NET_WM_PID` 过滤，Xvfb/无 WM 环境兜底）；X11 为可选依赖（`QEWT_SCOUT_X11`，缺失禁用不阻断）；Wayland native / 无 display 诚实降级（CPU/CDP 探针不受影响）
+  - **T1b CPU 启发**：`/proc/<pid>/stat` 差分采样（utime+stime × `sysconf(_SC_CLK_TCK)`），日志行/迟滞口径逐字对齐 Windows 版
+  - **TargetResolver**：`/proc` 枚举 + comm 探活 + ppid 建图，`descendantPids` BFS 3 层与 Windows 版语义一致
+  - **StackCapture（core）**：glibc `backtrace()` + `dladdr()`（≤32 帧、模块基址缓存、RVA 对齐）；`${CMAKE_DL_LIBS}` 链接（glibc 2.34 前 libdl 分离发行版如麒麟 V10 兼容）
+- **CI linux-smoke job**（ubuntu-latest）：Qt 5.15.2/6.5.3 × gcc 双矩阵——apt 一键依赖（libgl1-mesa-dev + xcb 平台插件全家桶含 Qt 6.5 硬依赖 libxcb-cursor0）、xvfb 无头冒烟、**CPU/冻结双 e2e**（basic_demo `--spin` 验证靶：cpuSpin 断言 + freeze 三态断言，靶与探针同 X server）；Configure/Build/Smoke/e2e 四级失败取证全落 GITHUB_STEP_SUMMARY（匿名可读）+ ldd soname 前置检查
+
+### 修复
+- `DataExporter.cpp:458`：`int64_t → QVariant` 隐式转换在 Linux GCC 下歧义（LP64 下 int64_t=long，与 QVariant int/long long 构造器打平；MSVC 下 int64_t=long long 精确匹配故从未暴露）——显式 `static_cast<qlonglong>`
+
 ## [v6.3.0] - 2026-10-02
 
 ### 新增

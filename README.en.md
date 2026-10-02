@@ -5,7 +5,7 @@
 [![CI](https://github.com/sclzj595/qtEventWatcher/actions/workflows/regression.yml/badge.svg)](https://github.com/sclzj595/qtEventWatcher/actions/workflows/regression.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Qt](https://img.shields.io/badge/Qt-5.15%20%7C%206.5-41cd52.svg)](https://www.qt.io/)
-[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20MSVC%20%7C%20MinGW-lightgrey.svg)](docs/02_需求范围与版本矩阵.md)
+[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](docs/02_需求范围与版本矩阵.md)
 [![standard](https://img.shields.io/badge/C%2B%2B-17-00599c.svg)](CMakeLists.txt)
 [![tests](https://img.shields.io/badge/tests-25%20cases%20%2F%2096%20checks-2ea44f.svg)](tests/unit/UnitTests.cpp)
 [![static analysis](https://img.shields.io/badge/cppcheck%20%2F%20W4-0%20findings-2ea44f.svg)](scripts/static-check.ps1)
@@ -151,7 +151,7 @@ The complete PRD collection (01~29: architecture / protocols / performance / rel
 
 - [x] **V6 quality line**: pure-logic unit tests + static analysis gates + ASan evidence ([docs/31](docs/31_V6实施计划.md))
 - [ ] **Scout out-of-process probe (product line B)**: jank detection for *any* desktop app (Electron/**Tauri**/WPF/Win32) from outside, aggregated into the same reports — **S1 delivered**: T1 window-freeze + T1b CPU heuristic ([examples/scout](examples/scout/), [docs/32](docs/32_V7-Scout实施计划.md)); **S2 delivered**: T2 CDP long-task probe — `scout --cdp-port 9222` attaches to Electron/Chromium pages for precise renderer long-task detection (target must cold-start with `--remote-debugging-port`); **Tauri verified**: all three probes pass (WebView2 port injected via `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, grandchild-process CPU sampling covered)
-- [ ] Linux support (portability already reserved in code; validation pending a real environment)
+- [x] **Linux prober support** (v6.4.0): all three Scout probes work on Linux — stack capture (backtrace+dladdr), process resolution & CPU sampling (/proc), window freeze detection (X11 _NET_WM_PING with Xvfb/no-WM fallback); CI dual matrix (Qt 5.15/6.5 × gcc) build+smoke+CPU/freeze e2e ([docs/32 §10](docs/32_V7-Scout实施计划.md)); native Wayland apps degrade gracefully (CPU/CDP probes unaffected)
 - [ ] QML / Qt Quick event-path coverage (currently Widgets-focused)
 - [ ] Flame-graph export (stack data already captured; renderer missing)
 - [ ] vcpkg / Conan packaging
