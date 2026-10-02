@@ -16,6 +16,7 @@
 - **本地一键 e2e**：`scripts/e2e_scout.ps1` 四场景（cpu/freeze/radar/uplink）断言健康自洽，Windows 本地可重复执行
 
 ### 修复
+- **freeze 三态配对边界改直通发射**：CI 慢机上 started 落在忙转尾段、recovered 下一拍即到（间隔 <1s 抑制窗口），同 key 第二条被风暴抑制静默降 DEBUG——下游冻结时间线配对被破坏（Run 26 实证回归，本地快机间隔 4s 掩盖）。`ScoutAlarmEmitter` 新增 `emitAlarmNow` 直通路径，started/recovered/lost 14 处改直通；ongoing 心跳/cpuSpin/cdp longtask 8 处保持抑制
 - **Linux X11 编译修复**：Xlib.h 将 `None` 定义为宏（`0L`），撕碎下游 TU 的 `ProbeLogic::FreezeEvent::None` case 标签——`X11Probe.h`（scout 唯一 X11 入口）末尾统一 `#undef None`；`RadarScheduler` Linux 分支补配置热加载状态声明（`lastConfigMtime`/`configWarned` 漏在 Windows 分支作用域内，本地 Windows 四矩阵被 `Q_OS_WIN` 屏蔽测不出，CI linux-smoke 暴露）
 - `ScoutAlarmEmitter`：方法名不可叫 `emit`——Qt 将 `emit` 定义为空宏（signal 关键字），会把函数签名整行撕碎并炸穿下游所有 Qt 头，改名 `emitAlarm`
 - `RadarScheduler`：cpuRuns 热更后仅新 episode 生效（既有 episode 的 runsNeeded 为构造期常量）——诚实边界，docs/34 §7 记录
