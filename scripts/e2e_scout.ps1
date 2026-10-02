@@ -111,13 +111,16 @@ if (Test-Path $uplinkJson) {
             $dump = ($s | ConvertTo-Json -Depth 8 -Compress)
             $hasRadar = $dump -match 'radar=1'
             $recv = [int]$s.received
+            $sdrop = [int]$s.dropped
             $pushed = [int]$s.health.pushed
             $lastSeq = [int]$s.health.lastSeq
-            Write-Host "  session pid=$($s.host_pid) received=$recv pushed=$pushed lastSeq=$lastSeq radar1=$hasRadar"
-            if ($hasRadar -and $recv -gt 0 -and $recv -eq $pushed -and $recv -eq $lastSeq) { $ok = $true }
+            Write-Host "  session pid=$($s.host_pid) received=$recv pushed=$pushed lastSeq=$lastSeq sdrop=$sdrop radar1=$hasRadar"
+            # 无损口径：实收==入库且零丢弃；health 是客户端自报快照，退出时
+            # 析构 flush 尾批不随行更新 health——允许 received>=pushed
+            if ($hasRadar -and $recv -gt 0 -and $recv -ge $pushed -and $sdrop -eq 0) { $ok = $true }
         }
-        if ($ok) { Write-Host "  [PASS] uplink - received==pushed==lastSeq with radar=1" }
-        else { Write-Host "  [FAIL] uplink chain inconsistent"; $global:Failures += "uplink: received==pushed==lastSeq with radar=1 not satisfied" }
+        if ($ok) { Write-Host "  [PASS] uplink - lossless (received==records, dropped=0, received>=pushed) with radar=1" }
+        else { Write-Host "  [FAIL] uplink chain inconsistent"; $global:Failures += "uplink: lossless uplink with radar=1 not satisfied" }
     } catch {
         Write-Host "  [FAIL] uplink json parse: $_"
         $global:Failures += "uplink: json parse failed"

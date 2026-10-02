@@ -12,7 +12,7 @@
   - **雷达配置文件持久化 + 热加载**：`--radar-config <file>` 读 INI `[radar]` 节（exclude/thresholdMs/intervalMs/cpuThreshold/cpuRuns），优先级 **默认 < 配置文件 < 显式 CLI**（显式位合成）；`RadarScheduler` 每 tick mtime 检查热重载（worker 线程独占读无锁），文件消失/解析失败保持旧配置并告警一次
   - **探针侧风暴抑制**：`ScoutAlarmEmitter` 复用核心库 `AlarmSuppressor`（1s 窗口首条必出 + 懒冲刷 suppressed=N 汇总）接入四探针全部 23 个告警发射点，key=`kind:receiver`——冻结状态配对头不吞，静默条降级 DEBUG（RecordSink 仍全量采集，回放完整性优先）
   - **UnitTests Scout 纯逻辑段**：+10 用例（FreezeTracker 三态全路径/CpuEpisodeTracker 迟滞/RadarConfig 解析）32→35 cases、131→153 checks，四矩阵全绿
-- **CI uplink 全链路 e2e**：linux 矩阵 radar e2e 扩展为 aggregator 同机 QLocalServer 收链路——断言落盘 JSON 含 `radar=1` 记录且 `received==pushed==lastSeq`；artifact 补漏 `scout_radar.log`/`basic_demo3.log`/`aggregator.log`/`scout_radar_uplink.json`
+- **CI uplink 全链路 e2e**：linux 矩阵 radar e2e 扩展为 aggregator 同机 QLocalServer 收链路——断言落盘 JSON 含 `radar=1` 记录且无损（实收==入库数、dropped=0；health 为客户端自报快照，退出时析构 flush 尾批不随行更新，允许 received>=pushed）；artifact 补漏 `scout_radar.log`/`basic_demo3.log`/`aggregator.log`/`scout_radar_uplink.json`
 - **本地一键 e2e**：`scripts/e2e_scout.ps1` 四场景（cpu/freeze/radar/uplink）断言健康自洽，Windows 本地可重复执行
 
 ### 修复

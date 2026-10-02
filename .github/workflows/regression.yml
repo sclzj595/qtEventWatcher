@@ -394,14 +394,19 @@ jobs:
               has_radar = any('radar=1' in json.dumps(r) for r in recs)
               h = s.get('health', {}) or {}
               recv = s.get('received', -1)
+              sdrop = s.get('dropped', -1)
               pushed, lastSeq = h.get('pushed', -1), h.get('lastSeq', -1)
               print(f"session pid={s.get('host_pid')} received={recv} "
-                    f"pushed={pushed} lastSeq={lastSeq} "
+                    f"pushed={pushed} lastSeq={lastSeq} sdrop={sdrop} "
                     f"records={len(recs)} radar1={has_radar}")
-              if has_radar and recv > 0 and recv == pushed == lastSeq:
+              # 无损口径：实收==入库 且零丢弃。health 是客户端周期自报快照，
+              # 退出时析构 flush 的尾批不随行更新 health（Run 28 实证
+              # received=3 pushed=2 零丢弃）——故允许 received>=pushed
+              if (has_radar and recv > 0 and recv == len(recs) and sdrop == 0
+                      and recv >= pushed >= 1):
                   ok = True
           if not ok:
-              print("FAIL: radar=1 record with received==pushed==lastSeq not found")
+              print("FAIL: radar=1 record lossless uplink not found")
               sys.exit(1)
           print("scout radar uplink chain OK")
           PYEOF
