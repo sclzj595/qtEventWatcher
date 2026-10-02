@@ -298,7 +298,12 @@ qewt-tauri-lab.exe --cdp-port 9226 --uplink TestAggE2E --duration 25000，
   （qxcbwindow.cpp handleClientMessageEvent，整包 echo 仅改 window=root），
   探针须选 StructureNotifyMask（1L<<17）才有交集——误选 SubstructureNotifyMask
   （1L<<18）则 pong 永远收不到，恢复态判定失效（Run 20 实证：started 可判
-  而 ongoing 无限拉长）；SubstructureRedirect 为 WM 独占掩码不可选
+  而 ongoing 无限拉长）；SubstructureRedirect 为 WM 独占掩码不可选。
+  封装格式取证实录（Run 21 实证）：Qt 的 ping 分支在 WM_PROTOCOLS 处理块内
+  （event->type==WM_PROTOCOLS 且 data32[0]==_NET_WM_PING 才 echo），裸
+  type=_NET_WM_PING 消息被按未知协议忽略——探针必须按 EWMH WM 发 ping 的
+  标准封装发送：type=WM_PROTOCOLS、l[0]=_NET_WM_PING、l[1]=token、l[2]=window；
+  回流匹配 type=WM_PROTOCOLS + l[0]=pingAtom + l[1]=token
 - token 防串扰：`g_pingToken` 原子计数（getpid() 作高位基座），逐拍 +1 防
   上一拍迟到 pong 污染本拍判定；匹配 message_type+format==32+token 三条件
 - 窗口枚举：`_NET_CLIENT_LIST`（EWMH，有 WM 时权威）∪ XQueryTree root 直接

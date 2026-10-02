@@ -231,11 +231,15 @@ QList<TargetWindow> collectTargetWindows(Display *dpy, Window root,
 	return matched;
 }
 
-/// 单窗口探活：发 _NET_WM_PING（event_mask=0 → 送达创建该窗口的 client，
-/// 与 WM 探测同路径），阈值内等应用原样回传的 pong（Qt/GTK 均整包 echo
-/// 到 root，探针选 StructureNotifyMask 收副本，见 run() 内注释）。无 pong
-/// = hung，与 SendMessageTimeoutW(WM_NULL, SMTO_ABORTIFHUNG) 同语义。
-bool pingWindow(Display *dpy, Atom pingAtom, Window win, int thresholdMs)
+/// 单窗口探活：按 EWMH 规范发 _NET_WM_PING——WM 发 ping 的标准封装是
+/// type=WM_PROTOCOLS、l[0]=_NET_WM_PING（子协议）、l[1]=timestamp、
+/// l[2]=window（裸 type=_NET_WM_PING 消息 Qt xcb 不认，按未知协议忽略——
+/// Run 20/21 实证）。event_mask=0 → 送达创建该窗口的 client，与 WM 探测
+/// 同路径。阈值内等应用整包 echo 到 root 的 pong（Qt qxcbwindow.cpp 仅改
+/// window=root，data 原样保留；探针选 StructureNotifyMask 收副本，见
+/// run() 注释）。无 pong = hung，与 WM_NULL/SMTO_ABORTIFHUNG 同语义。
+bool pingWindow(Display *dpy, Atom wmProtocolsAtom, Atom pingAtom,
+				Window win, int thresholdMs)
 {
 	const unsigned long token = g_pingToken.fetch_add(1);
 	XEvent ev;
@@ -243,10 +247,11 @@ bool pingWindow(Display *dpy, Atom pingAtom, Window win, int thresholdMs)
 	ev.xclient.type = ClientMessage;
 	ev.xclient.display = dpy;
 	ev.xclient.window = win;
-	ev.xclient.message_type = pingAtom;
+	ev.xclient.message_type = wmProtocolsAtom;	// 封装：WM_PROTOCOLS
 	ev.xclient.format = 32;
-	ev.xclient.data.l[0] = long(token);		// 应用原样回传（echo 保真）
-	ev.xclient.data.l[1] = long(win);		// 被测窗口自证
+	ev.xclient.data.l[0] = long(pingAtom);		// 子协议 = _NET_WM_PING
+	ev.xclient.data.l[1] = long(token);			// EWMH: timestamp 位（应用原样回传）
+	ev.xclient.data.l[2] = long(win);			// EWMH: 被测窗口自证
 	if (XSendEvent(dpy, win, False, 0, &ev) == 0)
 		return true;	// 发送失败按"不可探活"处理，不误报 hung
 
@@ -258,9 +263,10 @@ bool pingWindow(Display *dpy, Atom pingAtom, Window win, int thresholdMs)
 			XEvent got;
 			XNextEvent(dpy, &got);
 			if (got.type == ClientMessage
-				&& got.xclient.message_type == pingAtom
+				&& got.xclient.message_type == wmProtocolsAtom
 				&& got.xclient.format == 32
-				&& static_cast<unsigned long>(got.xclient.data.l[0]) == token)
+				&& static_cast<unsigned long>(got.xclient.data.l[0]) == pingAtom
+				&& static_cast<unsigned long>(got.xclient.data.l[1]) == token)
 				return true;
 		}
 		const qint64 remainMs = qint64(thresholdMs) - wait.elapsed();
@@ -311,12 +317,14 @@ void WindowFreezeProber::run()
 	}
 
 	Window root = DefaultRootWindow(dpy);
+	const Atom wmProtocolsAtom = XInternAtom(dpy, "WM_PROTOCOLS", False);
 	const Atom pingAtom = XInternAtom(dpy, "_NET_WM_PING", False);
 	const Atom pidAtom = XInternAtom(dpy, "_NET_WM_PID", False);
-	// pong 回流：Qt xcb 收到 ping 后整包 echo 到 root（qxcbwindow.cpp
-	// handleClientMessageEvent：reply 整包拷贝仅改 window=root，data/token
-	// 原样），回发 event_mask=StructureNotify|SubstructureRedirect——探针
-	// 选 root 的 StructureNotifyMask 即与回发 mask 有交集必达（注意不是
+	// pong 回流：Qt xcb 收到 ping（须 WM_PROTOCOLS 封装，见 pingWindow 注释）
+	// 后整包 echo 到 root（qxcbwindow.cpp handleClientMessageEvent：reply
+	// 整包拷贝仅改 window=root，type=WM_PROTOCOLS 与 data 全原样），回发
+	// event_mask=StructureNotify|SubstructureRedirect——探针选 root 的
+	// StructureNotifyMask 即与回发 mask 有交集必达（注意不是
 	// SubstructureNotifyMask：两者是不同掩码位，选错则 pong 永远收不到；
 	// SubstructureRedirect 是 WM 独占掩码不可选；WM 在/不在均成立）
 	XSelectInput(dpy, root, StructureNotifyMask);
@@ -341,7 +349,7 @@ void WindowFreezeProber::run()
 			const QList<TargetWindow> targets =
 				collectTargetWindows(dpy, root, pidSet, pidAtom);
 			for (const TargetWindow &t : targets) {
-				if (!pingWindow(dpy, pingAtom, t.win, m_thresholdMs)) {
+				if (!pingWindow(dpy, wmProtocolsAtom, pingAtom, t.win, m_thresholdMs)) {
 					proc = TargetResolver::processNameOf(t.pid);
 					if (proc.isEmpty())
 						proc = QStringLiteral("pid:%1").arg(t.pid);
