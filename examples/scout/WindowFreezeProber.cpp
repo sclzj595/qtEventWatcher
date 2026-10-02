@@ -159,7 +159,7 @@ namespace {
 
 /// 单调 ping token：本进程 pid 作高位基座（WM 真实 ping 用 X 服务器时间戳，
 /// 值域远低于 pid<<32），逐次 +1 防上一拍迟到 pong 污染本拍判定
-std::atomic<unsigned long> g_pingToken{ unsigned long(::getpid()) };
+std::atomic<unsigned long> g_pingToken{ static_cast<unsigned long>(::getpid()) };
 
 /// 目标顶层窗口（窗口 id + 所属 pid，procName 归因用）
 struct TargetWindow
@@ -260,7 +260,7 @@ bool pingWindow(Display *dpy, Atom pingAtom, Window win, int thresholdMs)
 			if (got.type == ClientMessage
 				&& got.xclient.message_type == pingAtom
 				&& got.xclient.format == 32
-				&& unsigned long(got.xclient.data.l[0]) == token)
+				&& static_cast<unsigned long>(got.xclient.data.l[0]) == token)
 				return true;
 		}
 		const qint64 remainMs = qint64(thresholdMs) - wait.elapsed();
